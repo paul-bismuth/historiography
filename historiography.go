@@ -5,7 +5,10 @@ import (
 	"github.com/golang/glog"
 	"github.com/spf13/cobra"
 	git "gopkg.in/libgit2/git2go.v25"
+	"time"
 )
+
+const format = "20060102"
 
 var root = &cobra.Command{
 	Use:   "historiography",
@@ -22,19 +25,47 @@ var root = &cobra.Command{
 	},
 }
 
-func IteratorFunc(commit *git.Commit) bool {
-	glog.Infof(commit.Summary())
-	return true
+func reorganise(commits [][]*git.Commit) map[*git.Oid]time.Time {
+	commitsMap := make(map[*git.Oid]time.Time)
+	if glog.V(2) {
+		glog.Infof("%q", commits)
+	}
+	for _, commitsArray := range commits {
+		commit := commitsArray[0]
+		if day := commit.Author().When.Weekday(); day == 0 || day == 6 {
+			continue
+		}
+
+		if glog.V(1) {
+			glog.Infof("computed day: %s", commit.Author().When.Format("Mon 02 Jan 2006"))
+		}
+	}
+
+	return commitsMap
 }
 
 func WalkRepo(repo *git.Repository) {
+	day, year, month := 0, 0, time.January
+	commits := [][]*git.Commit{}
+
 	if rev, err := repo.Walk(); err != nil {
 		utils.MustG(err)
 	} else {
 		defer rev.Free()
 		rev.Sorting(git.SortTime)
 		utils.MustG(rev.PushHead())
-		utils.MustG(rev.Iterate(IteratorFunc))
+		glog.Infof("parsing %s repository", repo.Workdir())
+		utils.MustG(rev.Iterate(func(commit *git.Commit) bool {
+			date := commit.Author().When
+			if day != date.Day() || month != date.Month() || year != date.Year() {
+				commits = append(commits, []*git.Commit{})
+				year, month, day = date.Date()
+			}
+			commits[len(commits)-1] = append(commits[len(commits)-1], commit)
+
+			return true
+		}))
+		reorganise(commits)
 	}
 }
 
