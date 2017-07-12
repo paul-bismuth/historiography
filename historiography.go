@@ -12,16 +12,34 @@ const format = "20060102"
 
 // protect against dirty repos
 
+type Repository struct {
+	*git.Repository
+	options git.CherrypickOptions
+}
+
+func NewRepository(path string) (repo *Repository, err error) {
+	repo = &Repository{}
+
+	if repo.options, err = git.DefaultCherrypickOptions(); err != nil {
+		return
+	}
+	if repo.Repository, err = git.OpenRepository(path); err != nil {
+		return
+	}
+
+	return
+}
+
 var root = &cobra.Command{
 	Use:   "historiography",
 	Short: "Rewrite git history dates",
 	Run: func(cmd *cobra.Command, args []string) {
 		for _, arg := range args {
-			if repo, err := git.OpenRepository(arg); err != nil {
-				utils.MustG(err)
+			if repo, err := NewRepository(arg); err != nil {
+				utils.Maybe(err)
 			} else {
 				defer repo.Free()
-				utils.Maybe(WalkRepo(repo))
+				utils.Maybe(repo.Reorganise( /* can pass options here in future*/ ))
 			}
 		}
 	},
@@ -53,84 +71,61 @@ func reorganise(commits [][]*git.Commit) (res []*git.Commit) {
 	return
 }
 
-func rebase(repo *git.Repository, commits []*git.Commit) (err error) {
+func (repo *Repository) rebase(commits []*git.Commit) (err error) {
 	// libgit does not support interactive rebase
 	// https://github.com/libgit2/libgit2/pull/2482
 	// we will create a temp branch and cherry pick from
 	if len(commits) == 0 {
 		return nil
 	}
-	//options, err := git.DefaultCherrypickOptions()
-	//if err != nil {
-	//	return
-	//}
 
-	b, err := repo.CreateBranch("test", commits[0], false)
+	parent := commits[0]
+
+	b, err := repo.CreateBranch("test", parent, false)
 	if err != nil {
 		return
 	}
-	defer b.Reference.Free()
 
-	branch, err := repo.AnnotatedCommitFromRef(b.Reference)
+	err = repo.SetHead(b.Reference.Name())
 	if err != nil {
 		return
 	}
-	defer branch.Free()
-
-	h, err := repo.Head()
+	err = repo.CheckoutHead(&git.CheckoutOpts{Strategy: git.CheckoutForce})
 	if err != nil {
 		return
 	}
-	defer h.Free()
 
-	head, err := repo.AnnotatedCommitFromRef(h)
-	if err != nil {
-		return
-	}
-	defer head.Free()
-
-	options, err := git.DefaultRebaseOptions()
-	if err != nil {
-		return
-	}
-	options.CheckoutOptions.ProgressCallback = func(path string, completed, total uint) git.ErrorCode {
-		glog.Infof("path: %s, completed: %d, total: %d", path, completed, total)
-		return git.ErrOk
-	}
-	options.CheckoutOptions.NotifyFlags = git.CheckoutNotifyAll
-	options.CheckoutOptions.NotifyCallback = func(why git.CheckoutNotifyType, path string, baseline, target, workdir git.DiffFile) git.ErrorCode {
-		glog.Infof("path: %s", path)
-		return git.ErrOk
+	for _, commit := range commits[1:] {
+		parent, err = repo.amend(b, commit, parent)
+		if err != nil {
+			return
+		}
 	}
 
-	rebase, err := repo.InitRebase(branch, nil, head, &options)
-	if err != nil {
-		return
-	}
-	defer rebase.Free()
-
-	return rebase.Finish()
-
-	//err = repo.SetHead(b.Reference.Name())
-	//if err != nil {
-	//	return
-	//}
-	//err = repo.CheckoutHead(&git.CheckoutOpts{Strategy: git.CheckoutForce})
-	//if err != nil {
-	//	return
-	//}
-	//repo.InitRebase(
-
-	//for _, commit := range commits {
-	//	err = repo.Cherrypick(commit, options)
-	//	if err != nil {
-	//		return
-	//	}
-	//	repo.Commit(b.Reference.Name(), /
-
+	return
 }
 
-func WalkRepo(repo *git.Repository) error {
+func (repo *Repository) amend(branch *git.Branch, commit, parent *git.Commit) (*git.Commit, error) {
+	err := repo.Cherrypick(commit, repo.options)
+	if err != nil {
+		return nil, err
+	}
+	tree, err := commit.Tree()
+	if err != nil {
+		return nil, err
+	}
+	id, err := repo.CreateCommit(
+		branch.Reference.Name(), commit.Author(), commit.Committer(), "prout",
+		tree, parent,
+	)
+	obj, err := repo.LookupCommit(id)
+	if err != nil {
+		return nil, err
+	}
+	return obj.AsCommit()
+}
+
+func (repo *Repository) Reorganise() error {
 	day, year, month := 0, 0, time.January
 	commits := [][]*git.Commit{}
 
@@ -157,7 +152,7 @@ func WalkRepo(repo *git.Repository) error {
 	}); err != nil {
 		return err
 	}
-	return rebase(repo, reorganise(commits))
+	return repo.rebase(reorganise(commits))
 }
 
 func init() {
