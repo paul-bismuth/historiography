@@ -4,7 +4,7 @@ import (
 	"github.com/golang/glog"
 	"github.com/paul-bismuth/historiography/utils"
 	"github.com/spf13/cobra"
-	git "gopkg.in/libgit2/git2go.v25"
+	git "gopkg.in/libgit2/git2go.v26"
 	"time"
 )
 
@@ -65,18 +65,60 @@ func rebase(repo *git.Repository, commits []*git.Commit) (err error) {
 	//	return
 	//}
 
-	onto, err := repo.CreateBranch("test", commits[0], false)
+	b, err := repo.CreateBranch("test", commits[0], false)
 	if err != nil {
 		return
 	}
-	err = repo.SetHead(b.Reference.Name())
+	defer b.Reference.Free()
+
+	branch, err := repo.AnnotatedCommitFromRef(b.Reference)
 	if err != nil {
 		return
 	}
-	err = repo.CheckoutHead(&git.CheckoutOpts{Strategy: git.CheckoutForce})
+	defer branch.Free()
+
+	h, err := repo.Head()
 	if err != nil {
 		return
 	}
+	defer h.Free()
+
+	head, err := repo.AnnotatedCommitFromRef(h)
+	if err != nil {
+		return
+	}
+	defer head.Free()
+
+	options, err := git.DefaultRebaseOptions()
+	if err != nil {
+		return
+	}
+	options.CheckoutOptions.ProgressCallback = func(path string, completed, total uint) git.ErrorCode {
+		glog.Infof("path: %s, completed: %d, total: %d", path, completed, total)
+		return git.ErrOk
+	}
+	options.CheckoutOptions.NotifyFlags = git.CheckoutNotifyAll
+	options.CheckoutOptions.NotifyCallback = func(why git.CheckoutNotifyType, path string, baseline, target, workdir git.DiffFile) git.ErrorCode {
+		glog.Infof("path: %s", path)
+		return git.ErrOk
+	}
+
+	rebase, err := repo.InitRebase(branch, nil, head, &options)
+	if err != nil {
+		return
+	}
+	defer rebase.Free()
+
+	return rebase.Finish()
+
+	//err = repo.SetHead(b.Reference.Name())
+	//if err != nil {
+	//	return
+	//}
+	//err = repo.CheckoutHead(&git.CheckoutOpts{Strategy: git.CheckoutForce})
+	//if err != nil {
+	//	return
+	//}
 	//repo.InitRebase(
 
 	//for _, commit := range commits {
@@ -85,8 +127,6 @@ func rebase(repo *git.Repository, commits []*git.Commit) (err error) {
 	//		return
 	//	}
 	//	repo.Commit(b.Reference.Name(), /
-	//}
-	return
 
 }
 
