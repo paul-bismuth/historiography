@@ -9,24 +9,44 @@ import (
 )
 
 const format = "20060102"
+const branchNameSize = 8
 
 // protect against dirty repos
 
-type Repository struct {
-	*git.Repository
-	options git.CherrypickOptions
+func branch() string {
+	return utils.SecureRandomString(branchNameSize)
 }
 
-func NewRepository(path string) (repo *Repository, err error) {
-	repo = &Repository{}
+// convenient struct to store bunch of params
+type Options struct {
+	repo       *git.Repository
+	branch     *git.Branch
+	checkout   git.CheckoutOpts
+	cherrypick git.CherrypickOptions
+}
 
-	if repo.options, err = git.DefaultCherrypickOptions(); err != nil {
+func (o *Options) Ref() string {
+	return o.branch.Reference.Name()
+}
+
+func (o *Options) Free() {
+	o.branch.Reference.Free()
+}
+
+func NewOptions(repo *git.Repository, target *git.Commit) (opt *Options, err error) {
+	opt = &Options{repo: repo}
+	opt.cherrypick, err = git.DefaultCherrypickOptions()
+	if err != nil {
 		return
 	}
-	if repo.Repository, err = git.OpenRepository(path); err != nil {
-		return
+	for {
+		opt.branch, err = repo.CreateBranch(branch(), target, false)
+		if err == nil {
+			break
+		}
 	}
 
+	opt.checkout = git.CheckoutOpts{Strategy: git.CheckoutForce}
 	return
 }
 
@@ -35,11 +55,11 @@ var root = &cobra.Command{
 	Short: "Rewrite git history dates",
 	Run: func(cmd *cobra.Command, args []string) {
 		for _, arg := range args {
-			if repo, err := NewRepository(arg); err != nil {
+			if repo, err := git.OpenRepository(arg); err != nil {
 				utils.Maybe(err)
 			} else {
 				defer repo.Free()
-				utils.Maybe(repo.Reorganise( /* can pass options here in future*/ ))
+				utils.Maybe(Reorganise(repo))
 			}
 		}
 	},
@@ -71,7 +91,7 @@ func reorganise(commits [][]*git.Commit) (res []*git.Commit) {
 	return
 }
 
-func (repo *Repository) rebase(commits []*git.Commit) (err error) {
+func rebase(repo *git.Repository, commits []*git.Commit) (err error) {
 	// libgit does not support interactive rebase
 	// https://github.com/libgit2/libgit2/pull/2482
 	// we will create a temp branch and cherry pick from
@@ -80,33 +100,43 @@ func (repo *Repository) rebase(commits []*git.Commit) (err error) {
 	}
 
 	parent := commits[0]
-
-	b, err := repo.CreateBranch("test", parent, false)
+	options, err := NewOptions(repo, parent)
 	if err != nil {
 		return
 	}
+	defer options.Free()
 
-	err = repo.SetHead(b.Reference.Name())
+	err = repo.SetHead(options.Ref())
 	if err != nil {
 		return
 	}
-	err = repo.CheckoutHead(&git.CheckoutOpts{Strategy: git.CheckoutForce})
+	err = repo.CheckoutHead(&options.checkout)
 	if err != nil {
 		return
 	}
-
+	tree, err := parent.Tree()
+	if err != nil {
+		return
+	}
+	id, err := parent.Amend(
+		options.Ref(), parent.Author(), parent.Committer(), parent.RawMessage(), tree,
+	)
+	parent, err = repo.LookupCommit(id)
+	if err != nil {
+		return
+	}
 	for _, commit := range commits[1:] {
-		parent, err = repo.amend(b, commit, parent)
+		parent, err = amend(options, commit, parent)
 		if err != nil {
 			return
 		}
 	}
 
-	return
+	return repo.StateCleanup()
 }
 
-func (repo *Repository) amend(branch *git.Branch, commit, parent *git.Commit) (*git.Commit, error) {
-	err := repo.Cherrypick(commit, repo.options)
+func amend(options *Options, commit, parent *git.Commit) (*git.Commit, error) {
+	err := options.repo.Cherrypick(commit, options.cherrypick)
 	if err != nil {
 		return nil, err
 	}
@@ -114,18 +144,13 @@ func (repo *Repository) amend(branch *git.Branch, commit, parent *git.Commit) (*
 	if err != nil {
 		return nil, err
 	}
-	id, err := repo.CreateCommit(
-		branch.Reference.Name(), commit.Author(), commit.Committer(), "prout",
-		tree, parent,
+	id, err := options.repo.CreateCommit(
+		options.Ref(), commit.Author(), commit.Committer(), commit.RawMessage(), tree, parent,
 	)
-	obj, err := repo.LookupCommit(id)
-	if err != nil {
-		return nil, err
-	}
-	return obj.AsCommit()
+	return options.repo.LookupCommit(id)
 }
 
-func (repo *Repository) Reorganise() error {
+func Reorganise(repo *git.Repository) error {
 	day, year, month := 0, 0, time.January
 	commits := [][]*git.Commit{}
 
@@ -152,7 +177,7 @@ func (repo *Repository) Reorganise() error {
 	}); err != nil {
 		return err
 	}
-	return repo.rebase(reorganise(commits))
+	return rebase(repo, reorganise(commits))
 }
 
 func init() {
@@ -160,5 +185,5 @@ func init() {
 }
 
 func main() {
-	utils.Must(root.Execute())
+	utils.Maybe(root.Execute())
 }
