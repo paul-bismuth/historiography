@@ -10,6 +10,8 @@ import (
 
 const format = "20060102"
 
+// protect against dirty repos
+
 var root = &cobra.Command{
 	Use:   "historiography",
 	Short: "Rewrite git history dates",
@@ -19,54 +21,103 @@ var root = &cobra.Command{
 				utils.MustG(err)
 			} else {
 				defer repo.Free()
-				WalkRepo(repo)
+				utils.Maybe(WalkRepo(repo))
 			}
 		}
 	},
 }
 
-func reorganise(commits [][]*git.Commit) map[*git.Oid]time.Time {
-	commitsMap := make(map[*git.Oid]time.Time)
+func reorganise(commits [][]*git.Commit) (res []*git.Commit) {
+
 	if glog.V(2) {
 		glog.Infof("%q", commits)
 	}
-	for _, commitsArray := range commits {
-		commit := commitsArray[0]
-		if day := commit.Author().When.Weekday(); day == 0 || day == 6 {
-			continue
-		}
+
+	// commits are in reverse order
+	for i := len(commits) - 1; i >= 0; i-- {
+		start := commits[i][len(commits[i])-1].Author().When
+		end := commits[i][0].Author().When
 
 		if glog.V(1) {
-			glog.Infof("computed day: %s", commit.Author().When.Format("Mon 02 Jan 2006"))
+			glog.Infof("computed day: %s", start.Format("Mon 02 Jan 2006"))
+			glog.Infof("elapsed time between commits: %f seconds", end.Sub(start).Seconds())
+		}
+		if day := start.Weekday(); day != 0 || day != 6 {
+			//recompute here
+		}
+
+		for j := len(commits[i]) - 1; j >= 0; j-- {
+			res = append(res, commits[i][j])
 		}
 	}
-
-	return commitsMap
+	return
 }
 
-func WalkRepo(repo *git.Repository) {
+func rebase(repo *git.Repository, commits []*git.Commit) (err error) {
+	// libgit does not support interactive rebase
+	// https://github.com/libgit2/libgit2/pull/2482
+	// we will create a temp branch and cherry pick from
+	if len(commits) == 0 {
+		return nil
+	}
+	//options, err := git.DefaultCherrypickOptions()
+	//if err != nil {
+	//	return
+	//}
+
+	onto, err := repo.CreateBranch("test", commits[0], false)
+	if err != nil {
+		return
+	}
+	err = repo.SetHead(b.Reference.Name())
+	if err != nil {
+		return
+	}
+	err = repo.CheckoutHead(&git.CheckoutOpts{Strategy: git.CheckoutForce})
+	if err != nil {
+		return
+	}
+	//repo.InitRebase(
+
+	//for _, commit := range commits {
+	//	err = repo.Cherrypick(commit, options)
+	//	if err != nil {
+	//		return
+	//	}
+	//	repo.Commit(b.Reference.Name(), /
+	//}
+	return
+
+}
+
+func WalkRepo(repo *git.Repository) error {
 	day, year, month := 0, 0, time.January
 	commits := [][]*git.Commit{}
 
-	if rev, err := repo.Walk(); err != nil {
-		utils.MustG(err)
-	} else {
-		defer rev.Free()
-		rev.Sorting(git.SortTime)
-		utils.MustG(rev.PushHead())
-		glog.Infof("parsing %s repository", repo.Workdir())
-		utils.MustG(rev.Iterate(func(commit *git.Commit) bool {
-			date := commit.Author().When
-			if day != date.Day() || month != date.Month() || year != date.Year() {
-				commits = append(commits, []*git.Commit{})
-				year, month, day = date.Date()
-			}
-			commits[len(commits)-1] = append(commits[len(commits)-1], commit)
-
-			return true
-		}))
-		reorganise(commits)
+	rev, err := repo.Walk()
+	if err != nil {
+		return err
 	}
+	defer rev.Free()
+	rev.Sorting(git.SortTime)
+	if err := rev.PushHead(); err != nil {
+		return err
+	}
+	glog.Infof("parsing %s repository", repo.Workdir())
+
+	if err := rev.Iterate(func(commit *git.Commit) bool {
+		date := commit.Author().When
+		if day != date.Day() || month != date.Month() || year != date.Year() {
+			commits = append(commits, []*git.Commit{})
+			year, month, day = date.Date()
+		}
+		commits[len(commits)-1] = append(commits[len(commits)-1], commit)
+
+		return true
+	}); err != nil {
+		return err
+	}
+	return rebase(repo, reorganise(commits))
 }
 
 func init() {
