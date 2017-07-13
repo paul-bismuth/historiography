@@ -39,3 +39,7 @@ func SecureRandomString(n int) string {
 
 	return string(b)
 }
+
+func Intn(n int) int {
+	return int(src.Int63() % int64(n))
+}
