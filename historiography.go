@@ -73,10 +73,8 @@ var root = &cobra.Command{
 
 func push(hour int, commit *git.Commit, changes Changes) {
 	old := commit.Author().When
-	new := time.Date(
-		old.Year(), old.Month(), old.Day(), hour, old.Minute(), old.Second(),
-		old.Nanosecond(), old.Location(),
-	)
+	new := old.Add(time.Duration(hour-old.Hour()) * time.Hour)
+
 	if glog.V(2) {
 		glog.Infof(
 			"commit: %s pushing from %s to %s",
@@ -87,7 +85,7 @@ func push(hour int, commit *git.Commit, changes Changes) {
 }
 
 func distribute(commits []*git.Commit, changes Changes) {
-	tmp := [24][]*git.Commit{}
+	tmp := [28][]*git.Commit{}
 	empty := []*git.Commit{}
 
 	for i := len(commits) - 1; i >= 0; i-- { // commits in reverse order
@@ -98,9 +96,7 @@ func distribute(commits []*git.Commit, changes Changes) {
 	// check if 8-9 is empty and push commits there if so
 	if len(tmp[8]) == 0 {
 		// randomly pick the end of the scan
-		//		for i := 8; i < 8+utils.Intn(6); i++ {
-		for i := 8; i < 13; i++ {
-
+		for i := 8; i < 8+utils.Intn(8); i++ {
 			if len(tmp[i]) != 0 {
 				tmp[8], tmp[i] = tmp[i], empty
 			}
@@ -121,11 +117,17 @@ func distribute(commits []*git.Commit, changes Changes) {
 			}
 		}
 	}
-	if first != 0 && last != 0 {
+	if first > 9 || last < 18 {
 		// remaining elapsed time
-		elapsed := tmp[last][0].Author().When.Sub(tmp[first][0].Author().When)
+		elapsed := last - first
+		step := utils.Intn(26-18-elapsed) + 18
+
 		if glog.V(2) {
-			glog.Infof("elapsed time of commits chunk %.2f hours", elapsed.Hours())
+			glog.Infof("elapsed time of commits chunk %d hours", elapsed)
+		}
+		for ; last >= first; last-- {
+			tmp[step], tmp[last] = tmp[last], empty
+			step++
 		}
 	}
 
