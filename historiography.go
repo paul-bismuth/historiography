@@ -11,6 +11,10 @@ import (
 const format = "20060102"
 const branchNameSize = 8
 
+// opening hours 9h - 18h -> repartition goes from 8h - 9h, 18h - 00h
+const startHour = 9
+const endHour = 18
+
 // protect against dirty repos
 
 func branch() string {
@@ -65,33 +69,88 @@ var root = &cobra.Command{
 	},
 }
 
-func reorganise(commits [][]*git.Commit) (res []*git.Commit) {
+func newHour(hour int, old time.Time) time.Time {
+	return time.Date(
+		old.Year(), old.Month(), old.Day(), hour, old.Minute(), old.Second(),
+		old.Nanosecond(), old.Location(),
+	)
+}
+
+func distribute(commits []*git.Commit) map[git.Oid]time.Time {
+	i, j := 0, 0
+	changes := make(map[git.Oid]time.Time)
+
+	// reverse ordered commits
+	for _, commit := range commits {
+		date := commit.Author().When.Hour()
+		if startHour > date {
+			break
+		}
+		if endHour <= date {
+			i++
+			j++
+			continue
+		}
+		j++
+	}
+	if j == len(commits) { // we can place commit in the morning between 8-9 AM
+		for j = j - 1; j >= i; j-- {
+			commit := commits[j]
+			date := commit.Author().When
+			if date.Hour() < 12 && date.Minute() < 30 { // CHANGE THIS!
+				changes[*commit.Id()] = newHour(8, date)
+			}
+		}
+	}
+	return changes
+
+	//if glog.V(1) {
+	//	glog.Infof("elapsed time between commits: %.2f hours", end.Sub(start).Hours())
+	//}
+}
+
+func reorganise(commits [][]*git.Commit) ([]*git.Commit, map[git.Oid]time.Time) {
 
 	if glog.V(2) {
 		glog.Infof("%q", commits)
 	}
+	changes := make(map[git.Oid]time.Time)
+	reordered := make([]*git.Commit, 0)
 
-	// commits are in reverse order
 	for i := len(commits) - 1; i >= 0; i-- {
-		start := commits[i][len(commits[i])-1].Author().When
-		end := commits[i][0].Author().When
-
+		day := commits[i][0].Author().When
 		if glog.V(1) {
-			glog.Infof("computed day: %s", start.Format("Mon 02 Jan 2006"))
-			glog.Infof("elapsed time between commits: %f seconds", end.Sub(start).Seconds())
+			glog.Infof("computed day: %s", day.Format("Mon 02 Jan 2006"))
 		}
-		if day := start.Weekday(); day != 0 || day != 6 {
-			//recompute here
+
+		if d := day.Weekday(); d != 0 && d != 6 {
+			for k, v := range distribute(commits[i]) {
+				changes[k] = v
+			}
 		}
 
 		for j := len(commits[i]) - 1; j >= 0; j-- {
-			res = append(res, commits[i][j])
+			reordered = append(reordered, commits[i][j])
 		}
+	}
+	return reordered, changes
+}
+
+func changeDates(
+	commit *git.Commit, changes map[git.Oid]time.Time,
+) (
+	author, committer *git.Signature,
+) {
+	author, committer = commit.Author(), commit.Committer()
+	if newdate, ok := changes[*commit.Id()]; ok {
+		author.When, committer.When = newdate, newdate
 	}
 	return
 }
 
-func rebase(repo *git.Repository, commits []*git.Commit) (err error) {
+func rebase(
+	repo *git.Repository, commits []*git.Commit, changes map[git.Oid]time.Time,
+) (err error) {
 	// libgit does not support interactive rebase
 	// https://github.com/libgit2/libgit2/pull/2482
 	// we will create a temp branch and cherry pick from
@@ -114,19 +173,18 @@ func rebase(repo *git.Repository, commits []*git.Commit) (err error) {
 	if err != nil {
 		return
 	}
-	tree, err := parent.Tree()
+	t, err := parent.Tree()
 	if err != nil {
 		return
 	}
-	id, err := parent.Amend(
-		options.Ref(), parent.Author(), parent.Committer(), parent.RawMessage(), tree,
-	)
+	a, c := changeDates(parent, changes)
+	id, err := parent.Amend(options.Ref(), a, c, parent.RawMessage(), t)
 	parent, err = repo.LookupCommit(id)
 	if err != nil {
 		return
 	}
 	for _, commit := range commits[1:] {
-		parent, err = amend(options, commit, parent)
+		parent, err = amend(options, commit, parent, changes)
 		if err != nil {
 			return
 		}
@@ -135,17 +193,21 @@ func rebase(repo *git.Repository, commits []*git.Commit) (err error) {
 	return repo.StateCleanup()
 }
 
-func amend(options *Options, commit, parent *git.Commit) (*git.Commit, error) {
+func amend(
+	options *Options, commit, parent *git.Commit, changes map[git.Oid]time.Time,
+) (
+	*git.Commit, error,
+) {
 	err := options.repo.Cherrypick(commit, options.cherrypick)
 	if err != nil {
 		return nil, err
 	}
-	tree, err := commit.Tree()
+	t, err := commit.Tree()
 	if err != nil {
 		return nil, err
 	}
 	id, err := options.repo.CreateCommit(
-		options.Ref(), commit.Author(), commit.Committer(), commit.RawMessage(), tree, parent,
+		options.Ref(), commit.Author(), commit.Committer(), commit.RawMessage(), t, parent,
 	)
 	return options.repo.LookupCommit(id)
 }
@@ -177,7 +239,10 @@ func Reorganise(repo *git.Repository) error {
 	}); err != nil {
 		return err
 	}
-	return rebase(repo, reorganise(commits))
+
+	reordered, changes := reorganise(commits)
+	return rebase(repo, reordered, changes)
+	//return nil
 }
 
 func init() {
