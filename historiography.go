@@ -16,9 +16,11 @@ const startHour = 9
 const endHour = 18
 
 // protect against dirty repos
+type Changes map[git.Oid]time.Time
 
 func branch() string {
-	return utils.SecureRandomString(branchNameSize)
+	return "test"
+	//return utils.SecureRandomString(branchNameSize)
 }
 
 // convenient struct to store bunch of params
@@ -76,9 +78,9 @@ func newHour(hour int, old time.Time) time.Time {
 	)
 }
 
-func distribute(commits []*git.Commit) map[git.Oid]time.Time {
+func distribute(commits []*git.Commit) Changes {
 	i, j := 0, 0
-	changes := make(map[git.Oid]time.Time)
+	changes := make(Changes)
 
 	// reverse ordered commits
 	for _, commit := range commits {
@@ -93,28 +95,45 @@ func distribute(commits []*git.Commit) map[git.Oid]time.Time {
 		}
 		j++
 	}
-	if j == len(commits) { // we can place commit in the morning between 8-9 AM
-		for j = j - 1; j >= i; j-- {
+	if j == len(commits) { // we can place commits in the morning between 8-9 AM
+		j = j - 1
+		prev := commits[j].Author().When
+
+		for ; j >= i; j-- {
 			commit := commits[j]
 			date := commit.Author().When
-			if date.Hour() < 12 && date.Minute() < 30 { // CHANGE THIS!
+			if date.Hour() < 13 && prev.Hour() == date.Hour() {
+				if glog.V(2) {
+					glog.Infof(
+						"commit: %s pushing from %d:%d to 8:%d", commit.Id().String()[:10],
+						date.Hour(), date.Minute(), date.Minute(),
+					)
+				}
 				changes[*commit.Id()] = newHour(8, date)
+				prev = date
+			} else {
+				break
 			}
 		}
 	}
+	// calculate remaining elapsed time
+	end := commits[0].Author().When
+	start := commits[j].Author().When
+	if glog.V(2) {
+		glog.Infof(
+			"elapsed time between remaining commits: %.2f hours",
+			end.Sub(start).Hours(),
+		)
+	}
 	return changes
-
-	//if glog.V(1) {
-	//	glog.Infof("elapsed time between commits: %.2f hours", end.Sub(start).Hours())
-	//}
 }
 
-func reorganise(commits [][]*git.Commit) ([]*git.Commit, map[git.Oid]time.Time) {
+func reorganise(commits [][]*git.Commit) ([]*git.Commit, Changes) {
 
-	if glog.V(2) {
-		glog.Infof("%q", commits)
-	}
-	changes := make(map[git.Oid]time.Time)
+	//if glog.V(2) {
+	//	glog.Infof("%q", commits)
+	//}
+	changes := make(Changes)
 	reordered := make([]*git.Commit, 0)
 
 	for i := len(commits) - 1; i >= 0; i-- {
@@ -136,20 +155,8 @@ func reorganise(commits [][]*git.Commit) ([]*git.Commit, map[git.Oid]time.Time) 
 	return reordered, changes
 }
 
-func changeDates(
-	commit *git.Commit, changes map[git.Oid]time.Time,
-) (
-	author, committer *git.Signature,
-) {
-	author, committer = commit.Author(), commit.Committer()
-	if newdate, ok := changes[*commit.Id()]; ok {
-		author.When, committer.When = newdate, newdate
-	}
-	return
-}
-
 func rebase(
-	repo *git.Repository, commits []*git.Commit, changes map[git.Oid]time.Time,
+	repo *git.Repository, commits []*git.Commit, changes Changes,
 ) (err error) {
 	// libgit does not support interactive rebase
 	// https://github.com/libgit2/libgit2/pull/2482
@@ -173,12 +180,12 @@ func rebase(
 	if err != nil {
 		return
 	}
-	t, err := parent.Tree()
+
+	r, m, a, c, t, err := getArgs(options, parent, changes)
 	if err != nil {
 		return
 	}
-	a, c := changeDates(parent, changes)
-	id, err := parent.Amend(options.Ref(), a, c, parent.RawMessage(), t)
+	id, err := parent.Amend(r, a, c, m, t)
 	parent, err = repo.LookupCommit(id)
 	if err != nil {
 		return
@@ -193,8 +200,22 @@ func rebase(
 	return repo.StateCleanup()
 }
 
+func getArgs(
+	options *Options, commit *git.Commit, changes Changes,
+) (
+	r, m string, a, c *git.Signature, t *git.Tree, e error,
+) {
+	r, m = options.Ref(), commit.RawMessage()
+	a, c = commit.Author(), commit.Committer()
+	if date, ok := changes[*commit.Id()]; ok {
+		a.When, c.When = date, date
+	}
+	t, e = commit.Tree()
+	return
+}
+
 func amend(
-	options *Options, commit, parent *git.Commit, changes map[git.Oid]time.Time,
+	options *Options, commit, parent *git.Commit, changes Changes,
 ) (
 	*git.Commit, error,
 ) {
@@ -202,13 +223,13 @@ func amend(
 	if err != nil {
 		return nil, err
 	}
-	t, err := commit.Tree()
+
+	r, m, a, c, t, err := getArgs(options, commit, changes)
 	if err != nil {
 		return nil, err
 	}
-	id, err := options.repo.CreateCommit(
-		options.Ref(), commit.Author(), commit.Committer(), commit.RawMessage(), t, parent,
-	)
+
+	id, err := options.repo.CreateCommit(r, a, c, m, t, parent)
 	return options.repo.LookupCommit(id)
 }
 
@@ -242,7 +263,6 @@ func Reorganise(repo *git.Repository) error {
 
 	reordered, changes := reorganise(commits)
 	return rebase(repo, reordered, changes)
-	//return nil
 }
 
 func init() {
