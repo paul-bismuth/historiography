@@ -1,16 +1,9 @@
 package utils
 
 import (
-	"github.com/golang/glog"
 	"math/rand"
 	"time"
 )
-
-func Maybe(err error) {
-	if err != nil {
-		glog.Errorf("%s", err)
-	}
-}
 
 // http://stackoverflow.com/questions/22892120/how-to-generate-a-random-string-of-a-fixed-length-in-golang
 var src = rand.NewSource(time.Now().UnixNano())
