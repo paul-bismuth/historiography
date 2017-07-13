@@ -71,45 +71,41 @@ var root = &cobra.Command{
 	},
 }
 
-func newHour(hour int, old time.Time) time.Time {
-	return time.Date(
+func push(hour int, commit *git.Commit, changes Changes) {
+	old := commit.Author().When
+
+	if glog.V(2) {
+		glog.Infof(
+			"commit: %s pushing from %d:%d to %d:%d",
+			commit.Id().String()[:10], old.Hour(), old.Minute(), hour, old.Minute(),
+		)
+	}
+	changes[*commit.Id()] = time.Date(
 		old.Year(), old.Month(), old.Day(), hour, old.Minute(), old.Second(),
 		old.Nanosecond(), old.Location(),
 	)
 }
 
-func distribute(commits []*git.Commit) Changes {
-	i, j := 0, 0
-	changes := make(Changes)
+func distribute(commits []*git.Commit, changes Changes) {
+	i := 0
 
 	// reverse ordered commits
 	for _, commit := range commits {
-		date := commit.Author().When.Hour()
-		if startHour > date {
+		if startHour > commit.Author().When.Hour() {
 			break
 		}
-		if endHour <= date {
-			i++
-			j++
-			continue
-		}
-		j++
+		i++
 	}
-	if j == len(commits) { // we can place commits in the morning between 8-9 AM
-		j = j - 1
-		prev := commits[j].Author().When
 
-		for ; j >= i; j-- {
-			commit := commits[j]
+	if i == len(commits) { // we can place commits in the morning between 8-9 AM
+		i = i - 1
+		prev := commits[i].Author().When
+
+		for ; i >= 0; i-- {
+			commit := commits[i]
 			date := commit.Author().When
 			if date.Hour() < 13 && prev.Hour() == date.Hour() {
-				if glog.V(2) {
-					glog.Infof(
-						"commit: %s pushing from %d:%d to 8:%d", commit.Id().String()[:10],
-						date.Hour(), date.Minute(), date.Minute(),
-					)
-				}
-				changes[*commit.Id()] = newHour(8, date)
+				push(8, commit, changes)
 				prev = date
 			} else {
 				break
@@ -118,14 +114,11 @@ func distribute(commits []*git.Commit) Changes {
 	}
 	// calculate remaining elapsed time
 	end := commits[0].Author().When
-	start := commits[j].Author().When
+	start := commits[i].Author().When
+	elapsed := end.Sub(start).Hours()
 	if glog.V(2) {
-		glog.Infof(
-			"elapsed time between remaining commits: %.2f hours",
-			end.Sub(start).Hours(),
-		)
+		glog.Infof("elapsed time between remaining commits: %.2f hours", elapsed)
 	}
-	return changes
 }
 
 func reorganise(commits [][]*git.Commit) ([]*git.Commit, Changes) {
@@ -143,9 +136,7 @@ func reorganise(commits [][]*git.Commit) ([]*git.Commit, Changes) {
 		}
 
 		if d := day.Weekday(); d != 0 && d != 6 {
-			for k, v := range distribute(commits[i]) {
-				changes[k] = v
-			}
+			distribute(commits[i], changes)
 		}
 
 		for j := len(commits[i]) - 1; j >= 0; j-- {
