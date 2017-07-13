@@ -5,6 +5,7 @@ import (
 	"github.com/golang/glog"
 	"github.com/spf13/cobra"
 	git "gopkg.in/libgit2/git2go.v26"
+	"os"
 	"time"
 )
 
@@ -59,15 +60,19 @@ func NewOptions(repo *git.Repository, target *git.Commit) (opt *Options, err err
 var root = &cobra.Command{
 	Use:   "historiography",
 	Short: "Rewrite git history dates",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) (err error) {
+		var repo *git.Repository
+
 		for _, arg := range args {
-			if repo, err := git.OpenRepository(arg); err != nil {
-				utils.Maybe(err)
-			} else {
-				defer repo.Free()
-				utils.Maybe(Reorganise(repo))
+			if repo, err = git.OpenRepository(arg); err != nil {
+				return
+			}
+			defer repo.Free()
+			if err = Reorganise(repo); err != nil {
+				return
 			}
 		}
+		return
 	},
 }
 
@@ -278,5 +283,8 @@ func init() {
 }
 
 func main() {
-	utils.Maybe(root.Execute())
+	if err := root.Execute(); err != nil {
+		glog.Errorf("%s", err)
+		os.Exit(1)
+	}
 }
