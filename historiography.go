@@ -73,51 +73,66 @@ var root = &cobra.Command{
 
 func push(hour int, commit *git.Commit, changes Changes) {
 	old := commit.Author().When
-
-	if glog.V(2) {
-		glog.Infof(
-			"commit: %s pushing from %d:%d to %d:%d",
-			commit.Id().String()[:10], old.Hour(), old.Minute(), hour, old.Minute(),
-		)
-	}
-	changes[*commit.Id()] = time.Date(
+	new := time.Date(
 		old.Year(), old.Month(), old.Day(), hour, old.Minute(), old.Second(),
 		old.Nanosecond(), old.Location(),
 	)
+	if glog.V(2) {
+		glog.Infof(
+			"commit: %s pushing from %s to %s",
+			commit.Id().String()[:10], old.Format("15:04"), new.Format("15:04"),
+		)
+	}
+	changes[*commit.Id()] = new
 }
 
 func distribute(commits []*git.Commit, changes Changes) {
-	i := 0
+	tmp := [24][]*git.Commit{}
+	empty := []*git.Commit{}
 
-	// reverse ordered commits
-	for _, commit := range commits {
-		if startHour > commit.Author().When.Hour() {
-			break
-		}
-		i++
+	for i := len(commits) - 1; i >= 0; i-- { // commits in reverse order
+		hour := commits[i].Author().When.Hour()
+		tmp[hour] = append(tmp[hour], commits[i])
 	}
 
-	if i == len(commits) { // we can place commits in the morning between 8-9 AM
-		i = i - 1
-		prev := commits[i].Author().When
+	// check if 8-9 is empty and push commits there if so
+	if len(tmp[8]) == 0 {
+		// randomly pick the end of the scan
+		//		for i := 8; i < 8+utils.Intn(6); i++ {
+		for i := 8; i < 13; i++ {
 
-		for ; i >= 0; i-- {
-			commit := commits[i]
-			date := commit.Author().When
-			if date.Hour() < 13 && prev.Hour() == date.Hour() {
-				push(8, commit, changes)
-				prev = date
-			} else {
-				break
+			if len(tmp[i]) != 0 {
+				tmp[8], tmp[i] = tmp[i], empty
 			}
 		}
 	}
-	// calculate remaining elapsed time
-	end := commits[0].Author().When
-	start := commits[i].Author().When
-	elapsed := end.Sub(start).Hours()
-	if glog.V(2) {
-		glog.Infof("elapsed time between remaining commits: %.2f hours", elapsed)
+
+	// reduce time between commits to max 2 hours
+	first, last := 0, 0
+	for i := 9; i < 24; i++ {
+		if len(tmp[i]) != 0 { // if there's commits
+			if first == 0 { // init if not already done
+				first, last = i, i
+			} else if i-last < 3 { // if difference if less than 2 hours
+				last = i // do nothing and update last encountered
+			} else { // otherwise move commits to reduce diff
+				tmp[last+2], tmp[i] = tmp[i], empty
+				last = last + 2
+			}
+		}
+	}
+	if first != 0 && last != 0 {
+		// remaining elapsed time
+		elapsed := tmp[last][0].Author().When.Sub(tmp[first][0].Author().When)
+		if glog.V(2) {
+			glog.Infof("elapsed time of commits chunk %.2f hours", elapsed.Hours())
+		}
+	}
+
+	for i, commits := range tmp {
+		for _, commit := range commits {
+			push(i, commit, changes)
+		}
 	}
 }
 
