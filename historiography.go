@@ -23,8 +23,7 @@ const endHour = 18
 type Changes map[git.Oid]time.Time
 
 func branch() string {
-	return "test"
-	//return utils.SecureRandomString(branchNameSize)
+	return utils.SecureRandomString(branchNameSize)
 }
 
 // convenient struct to store bunch of params
