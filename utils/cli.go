@@ -19,9 +19,12 @@ func defaultPersistentPreRun(cmd *cobra.Command, args []string) {
 }
 
 func InitCli(cmd *cobra.Command) {
+	cmd.PersistentFlags().BoolP("force", "f", false, "force change, no review of rescheduling")
 	cmd.PersistentFlags().BoolVar(&debug, "debug", false, "debug mode")
 	cmd.PersistentFlags().CountVarP(&verbosity, "verbose", "v", "verbose")
 	cmd.PersistentPreRun = defaultPersistentPreRun
+
+	viper.BindPFlag("Force", cmd.PersistentFlags().Lookup("force"))
 
 	viper.SetConfigName("historiography")
 	viper.AddConfigPath(".")
