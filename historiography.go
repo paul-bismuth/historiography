@@ -7,6 +7,7 @@ import (
 	"github.com/spf13/cobra"
 	git "gopkg.in/libgit2/git2go.v26"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 )
@@ -262,6 +263,16 @@ func rebase(
 		if err != nil {
 			return
 		}
+	}
+
+	if path, err := exec.LookPath("git"); err != nil {
+		fmt.Fprintf(os.Stderr, "git not found in path, can not display logs")
+		return err
+	} else if err := (&exec.Cmd{
+		Path: path, Args: []string{"git", "log"},
+		Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr,
+	}).Run(); err != nil {
+		return err
 	}
 
 	return nil
