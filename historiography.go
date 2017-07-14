@@ -137,6 +137,8 @@ func push(hour int, commit *git.Commit, changes Changes) {
 func distribute(commits []*git.Commit, changes Changes) {
 	tmp := [28][]*git.Commit{}
 	empty := []*git.Commit{}
+	// repartition function
+	repartition := utils.Weighted(10, 8, 4, 2)
 
 	for i := len(commits) - 1; i >= 0; i-- { // commits in reverse order
 		hour := commits[i].Author().When.Hour()
@@ -170,14 +172,13 @@ func distribute(commits []*git.Commit, changes Changes) {
 	if first > 9 || last < 18 {
 		// remaining elapsed time
 		elapsed := last - first
-		step := utils.Intn(26-18-elapsed) + 18
+		step := 18 - first + repartition()
 
 		if glog.V(2) {
 			glog.Infof("elapsed time of commits chunk %d hours", elapsed)
 		}
 		for ; last >= first; last-- {
-			tmp[step], tmp[last] = tmp[last], empty
-			step++
+			tmp[last+step], tmp[last] = tmp[last], empty
 		}
 	}
 
