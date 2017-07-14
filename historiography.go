@@ -13,15 +13,30 @@ import (
 	"time"
 )
 
-const format = "20060102"
 const branchNameSize = 8
 
-// opening hours 9h - 18h -> repartition goes from 8h - 9h, 18h - 00h
+// opening hours 9h - 18h -> repartition goes from 8h - 9h, 18h - 02h
 const startHour = 9
 const endHour = 18
 
 // protect against dirty repos
 type Changes map[git.Oid]time.Time
+type Commits []*git.Commit
+
+func (c Commits) String() string {
+	if len(c) == 0 {
+		return "{}"
+	}
+	var date time.Time
+	commits := []string{}
+
+	for _, entry := range c {
+		date = entry.Author().When
+		commits = append(commits, fmt.Sprintf("%s: %s",
+			entry.Id().String()[:10], date.Format("15:04")))
+	}
+	return fmt.Sprintf("{%s: [%s]}", date.Format("2006/01/02"), strings.Join(commits, ", "))
+}
 
 func branch() string {
 	return utils.SecureRandomString(branchNameSize)
@@ -152,9 +167,9 @@ func push(hour int, commit *git.Commit, changes Changes) {
 	changes[*commit.Id()] = new
 }
 
-func distribute(commits []*git.Commit, changes Changes) {
-	tmp := [28][]*git.Commit{}
-	empty := []*git.Commit{}
+func distribute(commits Commits, changes Changes) {
+	tmp := [28]Commits{}
+	empty := Commits{}
 	// repartition function
 	repartition := utils.Weighted(10, 8, 4, 2)
 
@@ -207,13 +222,12 @@ func distribute(commits []*git.Commit, changes Changes) {
 	}
 }
 
-func reorganise(commits [][]*git.Commit) ([]*git.Commit, Changes) {
-
-	//if glog.V(2) {
-	//	glog.Infof("%q", commits)
-	//}
+func reorganise(commits []Commits) (Commits, Changes) {
+	if glog.V(2) {
+		glog.Infof("%q", commits)
+	}
 	changes := make(Changes)
-	reordered := make([]*git.Commit, 0)
+	reordered := make(Commits, 0)
 
 	for i := len(commits) - 1; i >= 0; i-- {
 		day := commits[i][0].Author().When
@@ -233,7 +247,7 @@ func reorganise(commits [][]*git.Commit) ([]*git.Commit, Changes) {
 }
 
 func rebase(
-	repo *git.Repository, commits []*git.Commit, changes Changes,
+	repo *git.Repository, commits Commits, changes Changes,
 ) (
 	err error,
 ) {
@@ -367,7 +381,7 @@ func amend(
 
 func Reorganise(repo *git.Repository) error {
 	day, year, month := 0, 0, time.January
-	commits := [][]*git.Commit{}
+	commits := []Commits{}
 
 	rev, err := repo.Walk()
 	if err != nil {
@@ -385,7 +399,7 @@ func Reorganise(repo *git.Repository) error {
 	if err := rev.Iterate(func(commit *git.Commit) bool {
 		date := commit.Author().When
 		if day != date.Day() || month != date.Month() || year != date.Year() {
-			commits = append(commits, []*git.Commit{})
+			commits = append(commits, Commits{})
 			year, month, day = date.Date()
 		}
 		commits[len(commits)-1] = append(commits[len(commits)-1], commit)
