@@ -2,13 +2,11 @@ package main
 
 import (
 	"fmt"
+	"github.com/backinmydays/historiography"
 	"github.com/backinmydays/historiography/utils"
 	"github.com/golang/glog"
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 	git "gopkg.in/libgit2/git2go.v26"
-	"os"
-	"os/exec"
 	"strings"
 	"time"
 )
@@ -130,16 +128,13 @@ func NewOptions(repo *git.Repository, target *git.Commit) (opt *Options, err err
 }
 
 var root = &cobra.Command{
-	Use:   "historiography",
+	Use:   "histoctl",
 	Short: "Rewrite git history dates",
 	RunE: func(cmd *cobra.Command, args []string) (err error) {
 		cmd.SilenceUsage = true
 		var repo *git.Repository
 
 		for _, arg := range args {
-			if err = os.Chdir(arg); err != nil {
-				return
-			}
 			if repo, err = git.OpenRepository(arg); err != nil {
 				return
 			}
@@ -190,7 +185,7 @@ func distribute(commits Commits, changes Changes) {
 
 	// reduce time between commits to max 2 hours
 	first, last := 0, 0
-	for i := 9; i < 24; i++ {
+	for i := startHour; i < 24; i++ {
 		if len(tmp[i]) != 0 { // if there's commits
 			if first == 0 { // init if not already done
 				first, last = i, i
@@ -202,7 +197,7 @@ func distribute(commits Commits, changes Changes) {
 			}
 		}
 	}
-	if first > 9 || last < 18 {
+	if first >= startHour || last < endHour {
 		// remaining elapsed time
 		elapsed := last - first
 		step := 18 - first + repartition()
@@ -223,7 +218,7 @@ func distribute(commits Commits, changes Changes) {
 }
 
 func reorganise(commits []Commits) (Commits, Changes) {
-	if glog.V(2) {
+	if glog.V(5) {
 		glog.Infof("%q", commits)
 	}
 	changes := make(Changes)
@@ -296,54 +291,11 @@ func rebase(
 		}
 	}
 
-	ok, err := confirm()
+	ok, err := historiography.Confirm(options.repo)
 	if err != nil || !ok {
 		return
 	}
 	return options.Override()
-}
-
-func confirm() (ok bool, err error) {
-	if viper.GetBool("Force") { // if force set up, skip this phase
-		return true, nil
-	}
-
-	var response, path string
-
-	path, err = exec.LookPath("git")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "git not found in path, can not display logs")
-		return
-	}
-
-	cmd := &exec.Cmd{
-		Path: path, Args: []string{"git", "log"},
-		Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr,
-	}
-
-	err = cmd.Run()
-	if err != nil {
-		return
-	}
-	for {
-
-		fmt.Println("Is rescheduling correct? [Y/n] (see again? [?]): ")
-		_, err = fmt.Scanln(&response)
-		if err != nil {
-			return true, nil // default choice
-		}
-		response = strings.ToLower(response[:1])
-		switch response {
-		case "y":
-			return true, err
-		case "n":
-			return
-		case "?":
-			return confirm()
-		default:
-			fmt.Fprintf(os.Stderr, "\nResponse is incorrect!\n")
-		}
-	}
 }
 
 func getArgs(
