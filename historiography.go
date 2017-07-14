@@ -1,11 +1,13 @@
 package main
 
 import (
+	"fmt"
 	"github.com/backinmydays/historiography/utils"
 	"github.com/golang/glog"
 	"github.com/spf13/cobra"
 	git "gopkg.in/libgit2/git2go.v26"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -27,6 +29,7 @@ func branch() string {
 // convenient struct to store bunch of params
 type Options struct {
 	repo       *git.Repository
+	head       *git.Reference
 	branch     *git.Branch
 	checkout   git.CheckoutOpts
 	cherrypick git.CherrypickOptions
@@ -36,16 +39,50 @@ func (o *Options) Ref() string {
 	return o.branch.Reference.Name()
 }
 
+func (o *Options) Delete() (err error) {
+	if _, err = o.branch.Resolve(); err != nil {
+		return nil // branch does not exist anymore, abort
+	}
+	if err = o.repo.SetHead(o.head.Name()); err != nil {
+		return
+	}
+	if err = o.repo.CheckoutHead(&o.checkout); err != nil {
+		return
+	}
+	if err = o.branch.Delete(); err != nil {
+		return
+	}
+	return
+}
+
 func (o *Options) Free() {
+	if err := o.repo.StateCleanup(); err != nil {
+		glog.Errorf("cleaning repo state failed: %s", err)
+	}
+	if err := o.Delete(); err != nil {
+		glog.Errorf("cleaning repo state failed: %s", err)
+	}
+
 	o.branch.Reference.Free()
 }
 
 func NewOptions(repo *git.Repository, target *git.Commit) (opt *Options, err error) {
 	opt = &Options{repo: repo}
+
+	if repo.State() != git.RepositoryStateNone {
+		return nil, fmt.Errorf("repository is not in a clear state")
+	}
+
 	opt.cherrypick, err = git.DefaultCherrypickOptions()
 	if err != nil {
 		return
 	}
+
+	opt.head, err = repo.Head()
+	if err != nil {
+		return
+	}
+
 	for {
 		opt.branch, err = repo.CreateBranch(branch(), target, false)
 		if err == nil {
@@ -61,13 +98,19 @@ var root = &cobra.Command{
 	Use:   "historiography",
 	Short: "Rewrite git history dates",
 	RunE: func(cmd *cobra.Command, args []string) (err error) {
+		cmd.SilenceUsage = true
 		var repo *git.Repository
 
 		for _, arg := range args {
+			if err = os.Chdir(arg); err != nil {
+				return
+			}
 			if repo, err = git.OpenRepository(arg); err != nil {
 				return
 			}
+
 			defer repo.Free()
+
 			if err = Reorganise(repo); err != nil {
 				return
 			}
@@ -154,7 +197,7 @@ func reorganise(commits [][]*git.Commit) ([]*git.Commit, Changes) {
 	for i := len(commits) - 1; i >= 0; i-- {
 		day := commits[i][0].Author().When
 		if glog.V(1) {
-			glog.Infof("computed day: %s", day.Format("Mon 02 Jan 2006"))
+			glog.Infof("computing day: %s", day.Format("Mon 02 Jan 2006"))
 		}
 
 		if d := day.Weekday(); d != 0 && d != 6 {
@@ -170,15 +213,17 @@ func reorganise(commits [][]*git.Commit) ([]*git.Commit, Changes) {
 
 func rebase(
 	repo *git.Repository, commits []*git.Commit, changes Changes,
-) (err error) {
+) (
+	err error,
+) {
 	// libgit does not support interactive rebase
 	// https://github.com/libgit2/libgit2/pull/2482
 	// we will create a temp branch and cherry pick from
 	if len(commits) == 0 {
 		return nil
 	}
-
 	parent := commits[0]
+
 	options, err := NewOptions(repo, parent)
 	if err != nil {
 		return
@@ -198,11 +243,17 @@ func rebase(
 	if err != nil {
 		return
 	}
+
 	id, err := parent.Amend(r, a, c, m, t)
+	if err != nil {
+		return
+	}
+
 	parent, err = repo.LookupCommit(id)
 	if err != nil {
 		return
 	}
+
 	for _, commit := range commits[1:] {
 		parent, err = amend(options, commit, parent, changes)
 		if err != nil {
@@ -210,7 +261,7 @@ func rebase(
 		}
 	}
 
-	return repo.StateCleanup()
+	return nil
 }
 
 func getArgs(
@@ -259,7 +310,9 @@ func Reorganise(repo *git.Repository) error {
 	if err := rev.PushHead(); err != nil {
 		return err
 	}
-	glog.Infof("parsing %s repository", repo.Workdir())
+	if glog.V(1) {
+		glog.Infof("parsing %s repository", repo.Workdir())
+	}
 
 	if err := rev.Iterate(func(commit *git.Commit) bool {
 		date := commit.Author().When
@@ -283,8 +336,11 @@ func init() {
 }
 
 func main() {
-	if err := root.Execute(); err != nil {
+	pred := func(err error) bool {
+		return (err != nil && bool(glog.V(1)) &&
+			!strings.Contains(err.Error(), "unknown flag:"))
+	}
+	if err := root.Execute(); pred(err) {
 		glog.Errorf("%s", err)
-		os.Exit(1)
 	}
 }
