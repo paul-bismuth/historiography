@@ -5,6 +5,7 @@ import (
 	"github.com/backinmydays/historiography/utils"
 	"github.com/golang/glog"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 	git "gopkg.in/libgit2/git2go.v26"
 	"os"
 	"os/exec"
@@ -289,6 +290,10 @@ func rebase(
 }
 
 func confirm() (ok bool, err error) {
+	if viper.GetBool("Force") { // if force set up, skip this phase
+		return true, nil
+	}
+
 	var response, path string
 
 	path, err = exec.LookPath("git")
