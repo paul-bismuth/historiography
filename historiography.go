@@ -40,7 +40,9 @@ func (o *Options) Ref() string {
 }
 
 func (o *Options) Delete() (err error) {
-	if _, err = o.branch.Resolve(); err != nil {
+	var ref *git.Reference
+
+	if ref, err = o.branch.Resolve(); err != nil {
 		return nil // branch does not exist anymore, abort
 	}
 	if err = o.repo.SetHead(o.head.Name()); err != nil {
@@ -49,7 +51,7 @@ func (o *Options) Delete() (err error) {
 	if err = o.repo.CheckoutHead(&o.checkout); err != nil {
 		return
 	}
-	if err = o.branch.Delete(); err != nil {
+	if err = ref.Delete(); err != nil {
 		return
 	}
 	return
