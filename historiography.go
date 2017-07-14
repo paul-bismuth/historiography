@@ -35,6 +35,23 @@ type Options struct {
 	cherrypick git.CherrypickOptions
 }
 
+func (o *Options) Override() error {
+	ref, err := o.branch.Resolve()
+	if err != nil {
+		return err
+	}
+	commit, err := o.repo.LookupCommit(ref.Target())
+	if err != nil {
+		return err
+	}
+	branch, err := o.head.Branch().Name()
+	if err != nil {
+		return err
+	}
+	_, err = o.repo.CreateBranch(branch, commit, true)
+	return err
+}
+
 func (o *Options) Ref() string {
 	return o.branch.Reference.Name()
 }
@@ -264,17 +281,50 @@ func rebase(
 		}
 	}
 
-	if path, err := exec.LookPath("git"); err != nil {
+	ok, err := confirm()
+	if err != nil || !ok {
+		return
+	}
+	return options.Override()
+}
+
+func confirm() (ok bool, err error) {
+	var response, path string
+
+	path, err = exec.LookPath("git")
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "git not found in path, can not display logs")
-		return err
-	} else if err := (&exec.Cmd{
-		Path: path, Args: []string{"git", "log"},
-		Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr,
-	}).Run(); err != nil {
-		return err
+		return
 	}
 
-	return nil
+	cmd := &exec.Cmd{
+		Path: path, Args: []string{"git", "log"},
+		Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr,
+	}
+
+	err = cmd.Run()
+	if err != nil {
+		return
+	}
+	for {
+
+		fmt.Println("Is rescheduling correct? [Y/n] (see again? [?]): ")
+		_, err = fmt.Scanln(&response)
+		if err != nil {
+			return true, nil // default choice
+		}
+		response = strings.ToLower(response[:1])
+		switch response {
+		case "y":
+			return true, err
+		case "n":
+			return
+		case "?":
+			return confirm()
+		default:
+			fmt.Fprintf(os.Stderr, "\nResponse is incorrect!\n")
+		}
+	}
 }
 
 func getArgs(
