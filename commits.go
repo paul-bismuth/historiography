@@ -3,7 +3,6 @@ package historiography
 import (
 	"fmt"
 	"github.com/backinmydays/historiography/utils"
-	"github.com/golang/glog"
 	git "gopkg.in/libgit2/git2go.v26"
 	"strings"
 	"time"
@@ -84,12 +83,6 @@ func push(hour int, commit *git.Commit, changes Changes) {
 	old := commit.Author().When
 	new := old.Add(time.Duration(hour-old.Hour()) * time.Hour)
 
-	if glog.V(2) {
-		glog.Infof(
-			"commit: %s pushing from %s to %s",
-			commit.Id().String()[:10], old.Format("15:04"), new.Format("15:04"),
-		)
-	}
 	changes[*commit.Id()] = new
 }
 

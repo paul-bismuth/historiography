@@ -48,6 +48,10 @@ var root = &cobra.Command{
 			}
 			changes = histo.Reorganise(commits, distribute)
 
+			if glog.V(2) {
+				logs(histo.Flatten(commits), changes)
+			}
+
 			if err = historiography.Process(histo.Flatten(commits), changes); err != nil {
 				return
 			}
@@ -57,6 +61,9 @@ var root = &cobra.Command{
 		}
 		return
 	},
+}
+
+func logs(commits histo.Commits, changes histo.Change) {
 }
 
 func init() {
