@@ -94,6 +94,11 @@ func NewHistoriography(repo *git.Repository) (h *Historiography, err error) {
 		return
 	}
 
+	for {
+		if h.tmp, err = h.repo.CreateBranch(branch(), root, false); err == nil {
+			break
+		}
+	}
 	h.checkout = git.CheckoutOpts{Strategy: git.CheckoutForce}
 	return
 }
@@ -138,14 +143,6 @@ func (h *Historiography) Process(commits Commits, changes Changes) (err error) {
 	}
 
 	root := commits[0]
-
-	for {
-		branch, err := h.repo.CreateBranch(branch(), root, false)
-		if err == nil {
-			h.tmp = branch.Reference
-			break
-		}
-	}
 
 	r, m, a, c, t, err := getArgs(h, root, changes)
 	if err != nil {
