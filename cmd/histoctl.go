@@ -1,12 +1,14 @@
 package main
 
 import (
+	"flag"
 	histo "github.com/backinmydays/historiography"
-	"github.com/backinmydays/historiography/utils"
 	"github.com/golang/glog"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	git "gopkg.in/libgit2/git2go.v26"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -16,10 +18,29 @@ const startHour = 9
 const endHour = 18
 
 var closedDays = []time.Weekday{time.Saturday, time.Sunday}
+var verbosity int
+var debug bool
 
 var root = &cobra.Command{
 	Use:   "histoctl",
 	Short: "Rewrite git history dates",
+	PersistentPreRun: func(cmd *cobra.Command, args []string) {
+		if verbosity != 0 {
+			debug = verbosity >= 5
+		} else if debug {
+			verbosity = 5
+		}
+		os.Args = os.Args[:1]
+
+		flag.Set("v", strconv.Itoa(verbosity))
+		flag.Set("logtostderr", "true")
+		flag.Parse()
+		if verbosity < 5 {
+			glog.V(1).Infof("verbosity: %s", strings.Repeat("v", verbosity))
+		} else {
+			glog.V(1).Infof("verbosity: debug (vvvvv)")
+		}
+	},
 	RunE: func(cmd *cobra.Command, args []string) (err error) {
 		var repo *git.Repository
 		var commits []histo.Commits
@@ -76,7 +97,11 @@ func logs(commits histo.Commits, changes histo.Changes) {
 }
 
 func init() {
-	utils.InitCli(root)
+	root.PersistentFlags().BoolP("force", "f", false, "force change, no review of rescheduling")
+	root.PersistentFlags().BoolVar(&debug, "debug", false, "debug mode")
+	root.PersistentFlags().CountVarP(&verbosity, "verbose", "v", "verbose")
+
+	viper.BindPFlag("Force", root.PersistentFlags().Lookup("force"))
 }
 
 func main() {
