@@ -5,34 +5,66 @@ import (
 	"time"
 )
 
-func Retrieve(repo *git.Repository) (commits []Commits, err error) {
-	day, year, month := 0, 0, time.January
+type RevWalkerIterator interface {
+	RevWalkIterator(*git.Commit) bool
+}
 
-	rev, err := repo.Walk()
-	if err != nil {
+type RetrieveRootIterator struct {
+	root *git.Commit
+}
+
+func (rri *RetrieveRootIterator) RevWalkIterator(commit *git.Commit) bool {
+	rri.root = commit
+	return false
+}
+
+type RetrieveIterator struct {
+	commits []Commits
+	day     int
+	year    int
+	month   time.Month
+}
+
+func (ri *RetrieveIterator) RevWalkIterator(commit *git.Commit) bool {
+	date := commit.Author().When
+	if ri.day != date.Day() || ri.month != date.Month() || ri.year != date.Year() {
+		ri.commits = append(ri.commits, Commits{})
+		ri.year, ri.month, ri.day = date.Date()
+	}
+	index := len(ri.commits) - 1
+	ri.commits[index] = append(ri.commits[index], commit)
+
+	return true
+}
+
+// Walk throught commits of a repo using RevWalk from libgit.
+// Commits are passed in reversed topologically order (parent first,
+// then children). The RevWalk is started over HEAD refs.
+// It use the RevWalkerIterator interface function RevWalkIterator to walk
+// over commits.
+func RepoWalk(repo *git.Repository, rwi RevWalkerIterator) (err error) {
+	var rev *git.RevWalk
+
+	if rev, err = repo.Walk(); err != nil {
 		return
 	}
-
 	defer rev.Free()
-	rev.Sorting(git.SortReverse)
+	rev.Sorting(git.SortTopological | git.SortReverse)
+
 	if err = rev.PushHead(); err != nil {
 		return
 	}
-	//if glog.V(1) {
-	//	glog.Infof("parsing %s repository", repo.Workdir())
-	//}
+	return rev.Iterate(rwi.RevWalkIterator)
+}
 
-	err = rev.Iterate(func(commit *git.Commit) bool {
-		date := commit.Author().When
-		if day != date.Day() || month != date.Month() || year != date.Year() {
-			commits = append(commits, Commits{})
-			year, month, day = date.Date()
-		}
-		commits[len(commits)-1] = append(commits[len(commits)-1], commit)
+func RetrieveRoot(repo *git.Repository) (*git.Commit, error) {
+	var rri RetrieveRootIterator
+	return rri.root, RepoWalk(repo, &rri)
+}
 
-		return true
-	})
-	return
+func Retrieve(repo *git.Repository) (commits []Commits, err error) {
+	var ri RetrieveIterator
+	return ri.commits, RepoWalk(repo, &ri)
 }
 
 func Reorganise(commits []Commits, distributer Distributer) Changes {

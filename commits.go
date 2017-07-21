@@ -2,7 +2,6 @@ package historiography
 
 import (
 	"fmt"
-	"github.com/backinmydays/historiography/utils"
 	git "gopkg.in/libgit2/git2go.v26"
 	"strings"
 	"time"
@@ -92,7 +91,7 @@ func (d *Distribute) Distribute(commits Commits) Changes {
 	empty := Commits{}
 
 	// repartition function
-	repartition := utils.Weighted(10, 8, 4, 2)
+	repartition := Weighted(10, 8, 4, 2)
 
 	for _, commit := range commits { // commits in reverse order
 		hour := commit.Author().When.Hour()
@@ -102,7 +101,7 @@ func (d *Distribute) Distribute(commits Commits) Changes {
 	// check if 8-9 is empty and push commits there if so
 	if len(tmp[8]) == 0 {
 		// randomly pick the end of the scan
-		for i := 8; i < 8+utils.Intn(8); i++ {
+		for i := 8; i < 8+Intn(8); i++ {
 			if len(tmp[i]) != 0 {
 				tmp[8], tmp[i] = tmp[i], empty
 			}
@@ -124,15 +123,8 @@ func (d *Distribute) Distribute(commits Commits) Changes {
 		}
 	}
 	if first >= d.Start || last < d.End {
-		// remaining elapsed time
-		elapsed := last - first
-		step := 18 - first + repartition()
-
-		if glog.V(2) {
-			glog.Infof("elapsed time of commits chunk %d hours", elapsed)
-		}
 		for ; last >= first; last-- {
-			tmp[last+step], tmp[last] = tmp[last], empty
+			tmp[last+18-first+repartition()], tmp[last] = tmp[last], empty
 		}
 	}
 
