@@ -35,17 +35,26 @@ var root = &cobra.Command{
 			if repo, err = git.OpenRepository(arg); err != nil {
 				return
 			}
-			defer repo.Free()
 
+			if glog.V(1) {
+				glog.Infof("parsing %s repository", repo.Workdir())
+			}
+
+			defer repo.Free()
+			// retrieve all commits from HEAD
+			if commits, err = histo.Retrieve(repo); err != nil {
+				return
+			}
+			// if no commits, no need to go further
+			if len(commits) == 0 {
+				return
+			}
 			// init historiography struct
 			if historiography, err = histo.NewHistoriography(repo); err != nil {
 				return
 			}
 			defer historiography.Free()
 
-			if commits, err = histo.Retrieve(repo); err != nil {
-				return
-			}
 			changes = histo.Reorganise(commits, distribute)
 
 			if glog.V(2) {
@@ -63,7 +72,7 @@ var root = &cobra.Command{
 	},
 }
 
-func logs(commits histo.Commits, changes histo.Change) {
+func logs(commits histo.Commits, changes histo.Changes) {
 }
 
 func init() {
