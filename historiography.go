@@ -9,8 +9,20 @@ import (
 
 const branchNameSize = 8
 
-func branch() string {
-	return utils.SecureRandomString(branchNameSize)
+func tmpBranch(repo *git.Repository) (*git.Reference, error) {
+	name := func() string { return SecureRandomString(branchNameSize) }
+	root, err := RetrieveRoot(repo)
+	if err != nil {
+		return nil, err
+	}
+
+	for {
+		branch, err := repo.CreateBranch(name(), root, false)
+		if err == nil {
+			return branch.Reference, nil
+		}
+	}
+	return nil, nil // this will never been reached
 }
 
 func getArgs(
@@ -27,7 +39,9 @@ func getArgs(
 	return
 }
 
-// convenient struct to store bunch of params
+// Historiography struct is responsible of creating and deleting a temporary
+// branch to perform commits change. It holds a reference of the HEAD branch
+// which will be overriden if a call to Override() is performed.
 type Historiography struct {
 	repo       *git.Repository
 	head       *git.Reference
@@ -82,6 +96,7 @@ func (h *Historiography) Free() {
 
 func NewHistoriography(repo *git.Repository) (h *Historiography, err error) {
 	h = &Historiography{repo: repo}
+	h.checkout = git.CheckoutOpts{Strategy: git.CheckoutForce}
 
 	if repo.State() != git.RepositoryStateNone {
 		return nil, fmt.Errorf("repository is not in a clear state")
@@ -90,16 +105,25 @@ func NewHistoriography(repo *git.Repository) (h *Historiography, err error) {
 	if h.cherrypick, err = git.DefaultCherrypickOptions(); err != nil {
 		return
 	}
+
 	if h.head, err = h.repo.Head(); err != nil {
 		return
 	}
 
-	for {
-		if h.tmp, err = h.repo.CreateBranch(branch(), root, false); err == nil {
-			break
-		}
+	if h.tmp, err = tmpBranch(repo); err != nil {
+		return
 	}
-	h.checkout = git.CheckoutOpts{Strategy: git.CheckoutForce}
+
+	if err = h.repo.SetHead(h.tmp.Name()); err != nil {
+		h.Free()
+		return
+	}
+
+	if err = h.repo.CheckoutHead(&h.checkout); err != nil {
+		h.Free()
+		return
+	}
+
 	return
 }
 
@@ -138,21 +162,10 @@ func (h *Historiography) UpdateTmpRef() error {
 }
 
 func (h *Historiography) Process(commits Commits, changes Changes) (err error) {
-	if len(commits) == 0 {
-		return
-	}
-
 	root := commits[0]
 
 	r, m, a, c, t, err := getArgs(h, root, changes)
 	if err != nil {
-		return
-	}
-
-	if err = h.repo.SetHead(h.tmp.Name()); err != nil {
-		return
-	}
-	if err = h.repo.CheckoutHead(&h.checkout); err != nil {
 		return
 	}
 

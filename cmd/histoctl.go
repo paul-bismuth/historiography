@@ -1,12 +1,15 @@
 package main
 
 import (
+	"flag"
 	"github.com/golang/glog"
 	histo "github.com/paul-bismuth/historiography"
 	"github.com/paul-bismuth/historiography/utils"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	git "gopkg.in/libgit2/git2go.v26"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -16,10 +19,29 @@ const startHour = 9
 const endHour = 18
 
 var closedDays = []time.Weekday{time.Saturday, time.Sunday}
+var verbosity int
+var debug bool
 
 var root = &cobra.Command{
 	Use:   "histoctl",
 	Short: "Rewrite git history dates",
+	PersistentPreRun: func(cmd *cobra.Command, args []string) {
+		if verbosity != 0 {
+			debug = verbosity >= 5
+		} else if debug {
+			verbosity = 5
+		}
+		os.Args = os.Args[:1]
+
+		flag.Set("v", strconv.Itoa(verbosity))
+		flag.Set("logtostderr", "true")
+		flag.Parse()
+		if verbosity < 5 {
+			glog.V(1).Infof("verbosity: %s", strings.Repeat("v", verbosity))
+		} else {
+			glog.V(1).Infof("verbosity: debug (vvvvv)")
+		}
+	},
 	RunE: func(cmd *cobra.Command, args []string) (err error) {
 		var repo *git.Repository
 		var commits []histo.Commits
@@ -35,17 +57,26 @@ var root = &cobra.Command{
 			if repo, err = git.OpenRepository(arg); err != nil {
 				return
 			}
-			defer repo.Free()
 
+			if glog.V(1) {
+				glog.Infof("parsing %s repository", repo.Workdir())
+			}
+
+			defer repo.Free()
+			// retrieve all commits from HEAD
+			if commits, err = histo.Retrieve(repo); err != nil {
+				return
+			}
+			// if no commits, no need to go further
+			if len(commits) == 0 {
+				return
+			}
 			// init historiography struct
 			if historiography, err = histo.NewHistoriography(repo); err != nil {
 				return
 			}
 			defer historiography.Free()
 
-			if commits, err = histo.Retrieve(repo); err != nil {
-				return
-			}
 			changes = histo.Reorganise(commits, distribute)
 
 			if glog.V(2) {
@@ -63,11 +94,15 @@ var root = &cobra.Command{
 	},
 }
 
-func logs(commits histo.Commits, changes histo.Change) {
+func logs(commits histo.Commits, changes histo.Changes) {
 }
 
 func init() {
-	utils.InitCli(root)
+	root.PersistentFlags().BoolP("force", "f", false, "force change, no review of rescheduling")
+	root.PersistentFlags().BoolVar(&debug, "debug", false, "debug mode")
+	root.PersistentFlags().CountVarP(&verbosity, "verbose", "v", "verbose")
+
+	viper.BindPFlag("Force", root.PersistentFlags().Lookup("force"))
 }
 
 func main() {

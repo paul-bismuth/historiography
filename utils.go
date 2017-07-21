@@ -1,4 +1,4 @@
-package utils
+package historiography
 
 import (
 	"math/rand"
