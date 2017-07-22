@@ -2,17 +2,17 @@ package historiography
 
 import (
 	"fmt"
-	"github.com/spf13/viper"
 	git "gopkg.in/libgit2/git2go.v26"
 	"os"
 	"os/exec"
 	"strings"
 )
 
+// Helper function for displaying git log after rescheduling and ask user for
+// input.
+// It checks if git is available in path, then run a git log. After review is
+// done it asks for validation/redisplay/cancellation.
 func Confirm(repo *git.Repository) (ok bool, err error) {
-	if viper.GetBool("Force") { // if force set up, skip this phase
-		return true, nil
-	}
 
 	var response, path string
 

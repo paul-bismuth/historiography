@@ -5,7 +5,6 @@ import (
 	"time"
 )
 
-// http://stackoverflow.com/questions/22892120/how-to-generate-a-random-string-of-a-fixed-lenght-in-golang
 var src = rand.NewSource(time.Now().UnixNano())
 
 const letterBytes = "abcdefghijklmnopqrstuvwxyz0123456789"
@@ -15,6 +14,10 @@ const (
 	letterIdxMax  = 63 / letterIdxBits   // # of letter indices fitting in 63 bits
 )
 
+// Create a random lower case alphanumerical string of a specified size.
+//
+// Implementation comes from:
+// http://stackoverflow.com/questions/22892120/how-to-generate-a-random-string-of-a-fixed-lenght-in-golang
 func SecureRandomString(n int) string {
 	b := make([]byte, n)
 	// A src.Int63() generates 63 random bits, enough for letterIdxMax characters!
@@ -33,10 +36,16 @@ func SecureRandomString(n int) string {
 	return string(b)
 }
 
+// Works the same as rand.Intn but with an internal generated seed.
 func Intn(n int) int {
 	return int(src.Int63() % int64(n))
 }
 
+// Create a repartition function weighted according to params.
+// For instance, if we want a repartition of 50%, 25%, 25% we call weighted this way:
+//	Weighted(2, 1, 1) // same as Weighted(50, 25, 25)
+//
+// This will return 0, 50% of the calls, 1, 25% of the calls and 2, the last 25%.
 func Weighted(weights ...int) func() int {
 	repartition := []int{}
 	for i, weight := range weights {

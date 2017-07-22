@@ -7,11 +7,11 @@ import (
 	"time"
 )
 
-// Type storing the id of commit and the new time to apply when rebasing
+// Stores the id of commit and the new time to apply when rewriting.
 type Changes map[git.Oid]time.Time
 
 // Convenient alias for list of commit,
-// primarely designed to better displayed debug informations.
+// primarily designed to display debug informations in a convenient way.
 type Commits []*git.Commit
 
 // Display list of commits.
@@ -31,6 +31,8 @@ func (c Commits) String() string {
 	return fmt.Sprintf("{%s: [%s]}", date.Format("2006/01/02"), strings.Join(commits, ", "))
 }
 
+// Flatten the list of days which contains a list of commits each in a simple
+// commit list.
 func Flatten(commits []Commits) (flat Commits) {
 	for _, i := range commits {
 		for _, j := range i {
@@ -40,21 +42,32 @@ func Flatten(commits []Commits) (flat Commits) {
 	return
 }
 
+// Define a strategy to reschedule and distribute commits.
 type Distributer interface {
 	// Add a day worth of commit to be rescheduled, some days may not need any
 	// rescheduling because commits are already well distributed or day does not
-	// to the scope i.e: week-end days for instance
+	// belong to the scope i.e: week-end days for instance.
 	Reschedule(Commits) bool
 	// Distribute commit accross the day, all commits which should be moved must
 	// appear in the Changes structure, with the new date to reschedule to.
 	Distribute(Commits) Changes
 }
 
+// Default distributer for commits implemented in this library.
 type Distribute struct {
+	// Closed day in which commit hours are not relevant, those days commits will
+	// not be rescheduled.
+	Closed []time.Weekday
+	// If we are not in a closed day, we want to move commits out of a certain time
+	// frame. Start and End, represent the limits of this time frame. For example:
+	// we do not want commits to occur between 9h and 18h, we set up Start to
+	// 9 and End to 18.
 	Start, End int
-	Closed     []time.Weekday
 }
 
+// Implementation for default distributer.
+// Indicates if the day need a rescheduling,
+// i.e: commits are between Start and End hours and out of Closed days.
 func (d *Distribute) Reschedule(commits Commits) (b bool) {
 	// if empty no need to reschedule the day
 	if len(commits) == 0 {
@@ -78,13 +91,9 @@ func (d *Distribute) Reschedule(commits Commits) (b bool) {
 	return
 }
 
-func push(hour int, commit *git.Commit, changes Changes) {
-	old := commit.Author().When
-	new := old.Add(time.Duration(hour-old.Hour()) * time.Hour)
-
-	changes[*commit.Id()] = new
-}
-
+// Distribute day commits out of the Start and End limit.
+// Introduce some random distribution mechanisms to avoid pushing to the same
+// hours accross days.
 func (d *Distribute) Distribute(commits Commits) Changes {
 	changes := make(Changes)
 	tmp := [28]Commits{}
@@ -122,40 +131,22 @@ func (d *Distribute) Distribute(commits Commits) Changes {
 			}
 		}
 	}
+	// if there is still need for a rescheduling push commits out of time constraints
 	if first >= d.Start || last < d.End {
 		for ; last >= first; last-- {
 			tmp[last+18-first+repartition()], tmp[last] = tmp[last], empty
 		}
 	}
 
+	// everything as been rescheduled inside our tmp struct,
+	// push all changes to the changes map for use during rewriting phase.
 	for i, commits := range tmp {
 		for _, commit := range commits {
-			push(i, commit, changes)
+			old := commit.Author().When
+			new := old.Add(time.Duration(i-old.Hour()) * time.Hour)
+
+			changes[*commit.Id()] = new
 		}
 	}
 	return changes
 }
-
-//func reorganise(commits []Commits) (Commits, Changes) {
-//	if glog.V(5) {
-//		glog.Infof("%q", commits)
-//	}
-//	changes := make(Changes)
-//	reordered := make(Commits, 0)
-//
-//	for i := len(commits) - 1; i >= 0; i-- {
-//		day := commits[i][0].Author().When
-//		if glog.V(1) {
-//			glog.Infof("computing day: %s", day.Format("Mon 02 Jan 2006"))
-//		}
-//
-//		if d := day.Weekday(); d != 0 && d != 6 {
-//			distribute(commits[i], changes)
-//		}
-//
-//		for j := len(commits[i]) - 1; j >= 0; j-- {
-//			reordered = append(reordered, commits[i][j])
-//		}
-//	}
-//	return reordered, changes
-//}

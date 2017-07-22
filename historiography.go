@@ -8,14 +8,16 @@ import (
 
 const branchNameSize = 8
 
+// Create a temporary branch using a randomly generated string. Returns
+// the reference of this branch to caller.
 func tmpBranch(repo *git.Repository) (*git.Reference, error) {
 	name := func() string { return SecureRandomString(branchNameSize) }
-	root, err := RetrieveRoot(repo)
+	root, err := RetrieveRoot(repo) // retrieve first commit of HEAD ref, to create branch from
 	if err != nil {
 		return nil, err
 	}
 
-	for {
+	for { // we loop here just in case a branch with the same name exists
 		branch, err := repo.CreateBranch(name(), root, false)
 		if err == nil {
 			return branch.Reference, nil
@@ -24,13 +26,17 @@ func tmpBranch(repo *git.Repository) (*git.Reference, error) {
 	return nil, nil // this will never been reached
 }
 
+// Utilitary function which returns well formated arguments for creating commits.
 func getArgs(
 	h *Historiography, commit *git.Commit, changes Changes,
 ) (
 	r, m string, a, c *git.Signature, t *git.Tree, e error,
 ) {
+	// retrieve informations from old commit.
 	r, m = h.tmp.Name(), commit.RawMessage()
 	a, c = commit.Author(), commit.Committer()
+
+	// if we spot a change on this commit, we update the dates to match change.
 	if date, ok := changes[*commit.Id()]; ok {
 		a.When, c.When = date, date
 	}
@@ -49,20 +55,69 @@ type Historiography struct {
 	cherrypick git.CherrypickOptions
 }
 
+// Build a new Historiography struct, create branches, and hold references.
+//
+// For the moment the object hold reference from head, in the future we'd like
+// to configure the branch from which the temporary branch is created and which
+// will be overriden.
+func NewHistoriography(repo *git.Repository) (h *Historiography, err error) {
+	h = &Historiography{repo: repo}
+	h.checkout = git.CheckoutOpts{Strategy: git.CheckoutForce}
+
+	// non-clean repositories can be dangerous to operate, cancel and raise error
+	if repo.State() != git.RepositoryStateNone {
+		return nil, fmt.Errorf("repository is not in a clear state")
+	}
+
+	if h.cherrypick, err = git.DefaultCherrypickOptions(); err != nil {
+		return
+	}
+
+	// save ref of HEAD
+	if h.head, err = h.repo.Head(); err != nil {
+		return
+	}
+
+	// create tmp branch
+	if h.tmp, err = tmpBranch(repo); err != nil {
+		return
+	}
+
+	// switch to tmp branch, free the struct in case of an error
+	if err = h.repo.SetHead(h.tmp.Name()); err != nil {
+		h.Free()
+		return
+	}
+	if err = h.repo.CheckoutHead(&h.checkout); err != nil {
+		h.Free()
+		return
+	}
+
+	return
+}
+
+// Override the saved reference with the temporary branch.
 func (h *Historiography) Override() error {
+
+	// retrieve last commit from tmp branch
 	commit, err := h.repo.LookupCommit(h.tmp.Target())
 	if err != nil {
 		return err
 	}
+
+	// get saved reference branch name
 	branch, err := h.head.Branch().Name()
 	if err != nil {
 		return err
 	}
+
+	// override branch by forcing creation of a new branch with same name
 	_, err = h.repo.CreateBranch(branch, commit, true)
 	return err
 }
 
-func (h *Historiography) Delete() (err error) {
+// Delete tmp branch if still present and checkout saved ref.
+func (h *Historiography) del() (err error) {
 	var ref *git.Reference
 	if h.tmp == nil {
 		return
@@ -82,50 +137,21 @@ func (h *Historiography) Delete() (err error) {
 	return
 }
 
+// Free resources from libgit. Clean repository by deleting tmp branch.
+// Checkout saved reference to leave repository in same state as entered.
 func (h *Historiography) Free() {
 	if err := h.repo.StateCleanup(); err != nil {
 		glog.Errorf("cleaning repo state failed: %s", err)
 	}
-	if err := h.Delete(); err != nil {
+	if err := h.del(); err != nil {
 		glog.Errorf("cleaning repo state failed: %s", err)
 	}
 
 	h.tmp.Free()
 }
 
-func NewHistoriography(repo *git.Repository) (h *Historiography, err error) {
-	h = &Historiography{repo: repo}
-	h.checkout = git.CheckoutOpts{Strategy: git.CheckoutForce}
-
-	if repo.State() != git.RepositoryStateNone {
-		return nil, fmt.Errorf("repository is not in a clear state")
-	}
-
-	if h.cherrypick, err = git.DefaultCherrypickOptions(); err != nil {
-		return
-	}
-
-	if h.head, err = h.repo.Head(); err != nil {
-		return
-	}
-
-	if h.tmp, err = tmpBranch(repo); err != nil {
-		return
-	}
-
-	if err = h.repo.SetHead(h.tmp.Name()); err != nil {
-		h.Free()
-		return
-	}
-
-	if err = h.repo.CheckoutHead(&h.checkout); err != nil {
-		h.Free()
-		return
-	}
-
-	return
-}
-
+// Apply commit on top of the tmp branch, if commit appear in changes, date
+// will be updated.
 func (h *Historiography) Apply(commit *git.Commit, changes Changes) error {
 	err := h.repo.Cherrypick(commit, h.cherrypick)
 	if err != nil {
@@ -147,10 +173,12 @@ func (h *Historiography) Apply(commit *git.Commit, changes Changes) error {
 		return err
 	}
 
-	return h.UpdateTmpRef()
+	return h.updateTmpRef()
 }
 
-func (h *Historiography) UpdateTmpRef() error {
+// Each time a commit is applied on tmp branch we have to update our internal
+// reference.
+func (h *Historiography) updateTmpRef() error {
 	ref, err := h.tmp.Resolve()
 	if err != nil {
 		return err
@@ -160,6 +188,8 @@ func (h *Historiography) UpdateTmpRef() error {
 	return nil
 }
 
+// Play commits on top of the temporary branch, if a commit match a change,
+// the date will be changed accordingly.
 func (h *Historiography) Process(commits Commits, changes Changes) (err error) {
 	root := commits[0]
 
@@ -172,7 +202,7 @@ func (h *Historiography) Process(commits Commits, changes Changes) (err error) {
 		return
 	}
 
-	if err = h.UpdateTmpRef(); err != nil {
+	if err = h.updateTmpRef(); err != nil {
 		return
 	}
 
@@ -180,16 +210,6 @@ func (h *Historiography) Process(commits Commits, changes Changes) (err error) {
 		if err = h.Apply(commit, changes); err != nil {
 			return
 		}
-	}
-	return
-}
-
-func (h *Historiography) Confirm(c bool) (err error) {
-	if !c {
-		c, err = Confirm(h.repo)
-	}
-	if c {
-		err = h.Override()
 	}
 	return
 }
