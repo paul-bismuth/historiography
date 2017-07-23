@@ -7,9 +7,6 @@ import (
 	"time"
 )
 
-// Stores the id of commit and the new time to apply when rewriting.
-type Changes map[git.Oid]time.Time
-
 // Convenient alias for list of commit,
 // primarily designed to display debug informations in a convenient way.
 type Commits []*git.Commit
@@ -42,19 +39,17 @@ func Flatten(commits []Commits) (flat Commits) {
 	return
 }
 
-// Define a strategy to reschedule and distribute commits.
-type Distributer interface {
-	// Add a day worth of commit to be rescheduled, some days may not need any
-	// rescheduling because commits are already well distributed or day does not
-	// belong to the scope i.e: week-end days for instance.
-	Reschedule(Commits) bool
-	// Distribute commit accross the day, all commits which should be moved must
-	// appear in the Changes structure, with the new date to reschedule to.
-	Distribute(Commits) Changes
+// Define a strategy to alter commits.
+type Processer interface {
+	// First phase to run, allow user to have an overview of all commits of a
+	// branch and perform some preprocessing.
+	Preprocess(Commits) error
+	// Called when applying a commit, allow user to override some informations.
+	Process(*git.Commit) (a, c *git.Signature, m string, e error)
 }
 
-// Default distributer for commits implemented in this library.
-type Distribute struct {
+// Default processer for commits implemented in this library.
+type Processor struct {
 	// Closed day in which commit hours are not relevant, those days commits will
 	// not be rescheduled.
 	Closed []time.Weekday
@@ -63,19 +58,21 @@ type Distribute struct {
 	// we do not want commits to occur between 9h and 18h, we set up Start to
 	// 9 and End to 18.
 	Start, End int
+	// Stores the id of commit and the new time to apply when rewriting.
+	Changes map[git.Oid]time.Time
 }
 
 // Implementation for default distributer.
 // Indicates if the day need a rescheduling,
 // i.e: commits are between Start and End hours and out of Closed days.
-func (d *Distribute) Reschedule(commits Commits) (b bool) {
+func (p *Processor) Preprocess(commits Commits) (_ error) {
 	// if empty no need to reschedule the day
 	if len(commits) == 0 {
 		return
 	}
 	// first check day of commit list, if in closed days no need to reschedule
 	day := commits[0].Author().When.Weekday()
-	for _, o := range d.Closed {
+	for _, o := range p.Closed {
 		if o == day {
 			return
 		}
@@ -84,8 +81,8 @@ func (d *Distribute) Reschedule(commits Commits) (b bool) {
 	// now check if some commits are between start and end
 	for _, commit := range commits {
 		hour := commit.Author().When.Hour()
-		if hour >= d.Start && hour < d.End {
-			return true
+		if hour >= p.Start && hour < p.End {
+			p.Distribute(commits)
 		}
 	}
 	return
@@ -94,8 +91,7 @@ func (d *Distribute) Reschedule(commits Commits) (b bool) {
 // Distribute day commits out of the Start and End limit.
 // Introduce some random distribution mechanisms to avoid pushing to the same
 // hours accross days.
-func (d *Distribute) Distribute(commits Commits) Changes {
-	changes := make(Changes)
+func (p *Processor) Distribute(commits Commits) {
 	tmp := [28]Commits{}
 	empty := Commits{}
 
@@ -119,7 +115,7 @@ func (d *Distribute) Distribute(commits Commits) Changes {
 
 	// reduce time between commits to max 2 hours
 	first, last := 0, 0
-	for i := d.Start; i < 24; i++ {
+	for i := p.Start; i < 24; i++ {
 		if len(tmp[i]) != 0 { // if there's commits
 			if first == 0 { // init if not already done
 				first, last = i, i
@@ -132,7 +128,7 @@ func (d *Distribute) Distribute(commits Commits) Changes {
 		}
 	}
 	// if there is still need for a rescheduling push commits out of time constraints
-	if first >= d.Start || last < d.End {
+	if first >= p.Start || last < p.End {
 		for ; last >= first; last-- {
 			tmp[last+18-first+repartition()], tmp[last] = tmp[last], empty
 		}
@@ -145,8 +141,17 @@ func (d *Distribute) Distribute(commits Commits) Changes {
 			old := commit.Author().When
 			new := old.Add(time.Duration(i-old.Hour()) * time.Hour)
 
-			changes[*commit.Id()] = new
+			p.Changes[*commit.Id()] = new
 		}
 	}
-	return changes
+}
+
+func (p *Processor) Process(commit *git.Commit) (a, c *git.Signature, m string, e error) {
+	m = commit.RawMessage()
+	a, c = commit.Author(), commit.Committer()
+	// if we spot a change on this commit, we update the dates to match change.
+	if date, ok := p.Changes[*commit.Id()]; ok {
+		a.When, c.When = date, date
+	}
+	return
 }

@@ -81,21 +81,3 @@ func Retrieve(repo *git.Repository) (commits []Commits, err error) {
 	var ri RetrieveIterator
 	return ri.commits, RepoWalk(repo, &ri)
 }
-
-// Reorganise a list of commits according to a distributer strategy.
-// This function goes over commits and first check if commits of the day need
-// to be reschedule, and if so, ask a distribute function to provide needed
-// changes. Nothing is done here, this just precompute what the new dates can
-// be.
-func Reorganise(commits []Commits, distributer Distributer) Changes {
-	changes := Changes{}
-
-	for _, commit := range commits {
-		if distributer.Reschedule(commit) {
-			for k, v := range distributer.Distribute(commit) {
-				changes[k] = v
-			}
-		}
-	}
-	return changes
-}
