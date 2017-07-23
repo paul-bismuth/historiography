@@ -3,8 +3,6 @@ package main
 import (
 	"flag"
 	"github.com/golang/glog"
-	histo "github.com/paul-bismuth/historiography"
-	"github.com/paul-bismuth/historiography/utils"
 	"github.com/spf13/cobra"
 	"os"
 	"strconv"
@@ -15,6 +13,8 @@ var (
 	force     bool
 	debug     bool
 	verbosity int
+	author    string
+	email     string
 )
 
 var root = &cobra.Command{
@@ -44,7 +44,7 @@ var root = &cobra.Command{
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true // do not show usage if an error is returned
-		return run(args)
+		return run(args, author, email)
 	},
 }
 
@@ -54,6 +54,11 @@ func init() {
 		"force change, no review of rescheduling")
 	root.PersistentFlags().BoolVar(&debug, "debug", false, "debug mode")
 	root.PersistentFlags().CountVarP(&verbosity, "verbose", "v", "verbose")
+	root.PersistentFlags().StringVar(&author, "author", "",
+		"replace author by new one on all commits.")
+	root.PersistentFlags().StringVar(&email, "email", "",
+		"replace email by new one on all commits.")
+
 }
 
 func main() {

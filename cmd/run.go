@@ -13,16 +13,28 @@ const endHour = 18
 
 var closedDays = []time.Weekday{time.Saturday, time.Sunday}
 
-func run(args []string) (err error) {
+func newComposerProcessor(name, email string) *histo.ComposerProcessor {
+	// init processors
+	processors := []histo.Processer{
+		&histo.DateProcessor{closedDays, startHour, endHour, make(map[git.Oid]time.Time)},
+	}
+
+	// add more processors if needed
+	if name != "" {
+		processors = append(processors, &histo.NameProcessor{name})
+	}
+	if email != "" {
+		processors = append(processors, &histo.EmailProcessor{email})
+	}
+	return &histo.ComposerProcessor{processors}
+}
+
+func run(args []string, name, email string) (err error) {
 	var repo *git.Repository
 	var commits []histo.Commits
 	var historiography *histo.Historiography
 
-	// init processor
-	processor := &histo.Processor{
-		closedDays, startHour, endHour, make(map[git.Oid]time.Time),
-	}
-
+	processor := newComposerProcessor(name, email)
 	for _, arg := range args {
 		if repo, err = git.OpenRepository(arg); err != nil {
 			return
@@ -59,7 +71,9 @@ func run(args []string) (err error) {
 
 		// logs changes in a convenient if verbosity is hight enough
 		if glog.V(2) {
-			logs(commits, processor)
+			if dp, ok := processor.Processors[0].(*histo.DateProcessor); ok {
+				logs(commits, dp)
+			}
 		}
 
 		// apply changes on the temporary branch
@@ -89,7 +103,7 @@ func confirm(h *histo.Historiography, repo *git.Repository) (err error) {
 }
 
 // Logs commits and changes through glog in a readable way.
-func logs(commits []histo.Commits, p *histo.Processor) {
+func logs(commits []histo.Commits, p *histo.DateProcessor) {
 	fmt := func(t time.Time) string { return t.Format("15:06") } // all times formatted the same way
 
 	for _, day := range commits {

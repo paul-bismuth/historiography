@@ -3,7 +3,6 @@ package historiography
 import (
 	"fmt"
 	"github.com/golang/glog"
-	"github.com/paul-bismuth/historiography/utils"
 	git "gopkg.in/libgit2/git2go.v26"
 )
 
@@ -172,6 +171,7 @@ func (h *Historiography) updateTmpRef() error {
 	return nil
 }
 
+// Use embedded processer preprocess function on each day with a list of commits.
 func (h *Historiography) Preprocess(commits []Commits) error {
 	for _, commit := range commits {
 		if err := h.processer.Preprocess(commit); err != nil {
@@ -197,8 +197,8 @@ func (h *Historiography) getArgs(commit *git.Commit) (
 	return
 }
 
-// Play commits on top of the temporary branch, if a commit match a change,
-// the date will be changed accordingly.
+// Play commits on top of the temporary branch, embedded processer is called in
+// order to furnish informations for the new commit.
 func (h *Historiography) Process(commits Commits) (err error) {
 	root := commits[0]
 
