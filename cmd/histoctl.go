@@ -55,13 +55,14 @@ var root = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) (err error) {
 		var repo *git.Repository
 		var commits []histo.Commits
-		var changes histo.Changes
 		var historiography *histo.Historiography
 
 		cmd.SilenceUsage = true // do not show usage if an error is returned
 
-		// init distribute
-		distribute := &histo.Distribute{closedDays, startHour, endHour}
+		// init processor
+		processor := &histo.Processor{
+			closedDays, startHour, endHour, make(map[git.Oid]time.Time),
+		}
 
 		for _, arg := range args {
 			if repo, err = git.OpenRepository(arg); err != nil {
@@ -86,22 +87,24 @@ var root = &cobra.Command{
 			}
 
 			// init historiography struct
-			if historiography, err = histo.NewHistoriography(repo); err != nil {
+			if historiography, err = histo.NewHistoriography(repo, processor); err != nil {
 				return
 			}
 			// be sure to free resources when ending
 			defer historiography.Free()
 
 			// infers changes needed to be in sync with the distribution strategy
-			changes = histo.Reorganise(commits, distribute)
+			if err = historiography.Preprocess(commits); err != nil {
+				return
+			}
 
 			// logs changes in a convenient if verbosity is hight enough
 			if glog.V(2) {
-				logs(commits, changes)
+				logs(commits, processor)
 			}
 
 			// apply changes on the temporary branch
-			if err = historiography.Process(histo.Flatten(commits), changes); err != nil {
+			if err = historiography.Process(histo.Flatten(commits)); err != nil {
 				return
 			}
 
@@ -128,7 +131,7 @@ func confirm(h *histo.Historiography, repo *git.Repository) (err error) {
 }
 
 // Logs commits and changes through glog in a readable way.
-func logs(commits []histo.Commits, changes histo.Changes) {
+func logs(commits []histo.Commits, p *histo.Processor) {
 	fmt := func(t time.Time) string { return t.Format("15:06") } // all times formatted the same way
 
 	for _, day := range commits {
@@ -139,7 +142,7 @@ func logs(commits []histo.Commits, changes histo.Changes) {
 		for _, commit := range day {
 			commitTime := commit.Author().When
 			id := commit.Id().String()[:10]
-			if changeTime, ok := changes[*commit.Id()]; ok {
+			if changeTime, ok := p.Changes[*commit.Id()]; ok {
 				glog.Infof("commit %s at %s changed to %s", id, fmt(commitTime), fmt(changeTime))
 			} else {
 				glog.Infof("commit %s at %s not changed", id, fmt(commitTime))

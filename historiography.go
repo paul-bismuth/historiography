@@ -27,24 +27,6 @@ func tmpBranch(repo *git.Repository) (*git.Reference, error) {
 	return nil, nil // this will never been reached
 }
 
-// Utilitary function which returns well formated arguments for creating commits.
-func getArgs(
-	h *Historiography, commit *git.Commit, changes Changes,
-) (
-	r, m string, a, c *git.Signature, t *git.Tree, e error,
-) {
-	// retrieve informations from old commit.
-	r, m = h.tmp.Name(), commit.RawMessage()
-	a, c = commit.Author(), commit.Committer()
-
-	// if we spot a change on this commit, we update the dates to match change.
-	if date, ok := changes[*commit.Id()]; ok {
-		a.When, c.When = date, date
-	}
-	t, e = commit.Tree()
-	return
-}
-
 // Historiography struct is responsible of creating and deleting a temporary
 // branch to perform commits change. It holds a reference of the HEAD branch
 // which will be overriden if a call to Override() is performed.
@@ -54,6 +36,7 @@ type Historiography struct {
 	tmp        *git.Reference
 	checkout   git.CheckoutOpts
 	cherrypick git.CherrypickOptions
+	processer  Processer
 }
 
 // Build a new Historiography struct, create branches, and hold references.
@@ -61,8 +44,8 @@ type Historiography struct {
 // For the moment the object hold reference from head, in the future we'd like
 // to configure the branch from which the temporary branch is created and which
 // will be overriden.
-func NewHistoriography(repo *git.Repository) (h *Historiography, err error) {
-	h = &Historiography{repo: repo}
+func NewHistoriography(repo *git.Repository, p Processer) (h *Historiography, err error) {
+	h = &Historiography{repo: repo, processer: p}
 	h.checkout = git.CheckoutOpts{Strategy: git.CheckoutForce}
 
 	// non-clean repositories can be dangerous to operate, cancel and raise error
@@ -153,13 +136,13 @@ func (h *Historiography) Free() {
 
 // Apply commit on top of the tmp branch, if commit appear in changes, date
 // will be updated.
-func (h *Historiography) Apply(commit *git.Commit, changes Changes) error {
+func (h *Historiography) Apply(commit *git.Commit) error {
 	err := h.repo.Cherrypick(commit, h.cherrypick)
 	if err != nil {
 		return err
 	}
 
-	r, m, a, c, t, err := getArgs(h, commit, changes)
+	r, m, a, c, t, err := h.getArgs(commit)
 	if err != nil {
 		return err
 	}
@@ -189,12 +172,37 @@ func (h *Historiography) updateTmpRef() error {
 	return nil
 }
 
+func (h *Historiography) Preprocess(commits []Commits) error {
+	for _, commit := range commits {
+		if err := h.processer.Preprocess(commit); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Utilitary function which returns well formated arguments for creating commits.
+func (h *Historiography) getArgs(commit *git.Commit) (
+	r, m string, a, c *git.Signature, t *git.Tree, e error,
+) {
+	// retrieve informations from old commit.
+	r = h.tmp.Name()
+
+	a, c, m, e = h.processer.Process(commit)
+	if e != nil {
+		return
+	}
+
+	t, e = commit.Tree()
+	return
+}
+
 // Play commits on top of the temporary branch, if a commit match a change,
 // the date will be changed accordingly.
-func (h *Historiography) Process(commits Commits, changes Changes) (err error) {
+func (h *Historiography) Process(commits Commits) (err error) {
 	root := commits[0]
 
-	r, m, a, c, t, err := getArgs(h, root, changes)
+	r, m, a, c, t, err := h.getArgs(root)
 	if err != nil {
 		return
 	}
@@ -208,7 +216,7 @@ func (h *Historiography) Process(commits Commits, changes Changes) (err error) {
 	}
 
 	for _, commit := range commits[1:] {
-		if err = h.Apply(commit, changes); err != nil {
+		if err = h.Apply(commit); err != nil {
 			return
 		}
 	}
