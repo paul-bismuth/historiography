@@ -48,8 +48,8 @@ type Processer interface {
 	Process(*git.Commit) (a, c *git.Signature, m string, e error)
 }
 
-// Default processer for commits implemented in this library.
-type Processor struct {
+// Processor for changing dates of a commit list.
+type DateProcessor struct {
 	// Closed day in which commit hours are not relevant, those days commits will
 	// not be rescheduled.
 	Closed []time.Weekday
@@ -65,14 +65,14 @@ type Processor struct {
 // Implementation for default distributer.
 // Indicates if the day need a rescheduling,
 // i.e: commits are between Start and End hours and out of Closed days.
-func (p *Processor) Preprocess(commits Commits) (_ error) {
+func (dp *DateProcessor) Preprocess(commits Commits) (_ error) {
 	// if empty no need to reschedule the day
 	if len(commits) == 0 {
 		return
 	}
 	// first check day of commit list, if in closed days no need to reschedule
 	day := commits[0].Author().When.Weekday()
-	for _, o := range p.Closed {
+	for _, o := range dp.Closed {
 		if o == day {
 			return
 		}
@@ -81,8 +81,8 @@ func (p *Processor) Preprocess(commits Commits) (_ error) {
 	// now check if some commits are between start and end
 	for _, commit := range commits {
 		hour := commit.Author().When.Hour()
-		if hour >= p.Start && hour < p.End {
-			p.Distribute(commits)
+		if hour >= dp.Start && hour < dp.End {
+			dp.Distribute(commits)
 		}
 	}
 	return
@@ -91,7 +91,7 @@ func (p *Processor) Preprocess(commits Commits) (_ error) {
 // Distribute day commits out of the Start and End limit.
 // Introduce some random distribution mechanisms to avoid pushing to the same
 // hours accross days.
-func (p *Processor) Distribute(commits Commits) {
+func (dp *DateProcessor) Distribute(commits Commits) {
 	tmp := [28]Commits{}
 	empty := Commits{}
 
@@ -115,7 +115,7 @@ func (p *Processor) Distribute(commits Commits) {
 
 	// reduce time between commits to max 2 hours
 	first, last := 0, 0
-	for i := p.Start; i < 24; i++ {
+	for i := dp.Start; i < 24; i++ {
 		if len(tmp[i]) != 0 { // if there's commits
 			if first == 0 { // init if not already done
 				first, last = i, i
@@ -128,7 +128,7 @@ func (p *Processor) Distribute(commits Commits) {
 		}
 	}
 	// if there is still need for a rescheduling push commits out of time constraints
-	if first >= p.Start || last < p.End {
+	if first >= dp.Start || last < dp.End {
 		for ; last >= first; last-- {
 			tmp[last+18-first+repartition()], tmp[last] = tmp[last], empty
 		}
@@ -141,17 +141,113 @@ func (p *Processor) Distribute(commits Commits) {
 			old := commit.Author().When
 			new := old.Add(time.Duration(i-old.Hour()) * time.Hour)
 
-			p.Changes[*commit.Id()] = new
+			dp.Changes[*commit.Id()] = new
 		}
 	}
 }
 
-func (p *Processor) Process(commit *git.Commit) (a, c *git.Signature, m string, e error) {
+// Process a commit and return changed values if needed. DateProcessor only
+// operate on commit dates. Author and committer will not be changed.
+func (dp *DateProcessor) Process(commit *git.Commit) (a, c *git.Signature, m string, e error) {
 	m = commit.RawMessage()
 	a, c = commit.Author(), commit.Committer()
 	// if we spot a change on this commit, we update the dates to match change.
-	if date, ok := p.Changes[*commit.Id()]; ok {
+	if date, ok := dp.Changes[*commit.Id()]; ok {
 		a.When, c.When = date, date
+	}
+
+	return
+}
+
+// This processor replace name for both author and committer in all commits
+// processed.
+type NameProcessor struct {
+	// New name to apply on commits.
+	Name string
+}
+
+// Preprocess is no-op for NameProcessor
+func (np *NameProcessor) Preprocess(_ Commits) error { return nil }
+
+// Change author and committer name to the new one defined by the structure.
+func (np *NameProcessor) Process(commit *git.Commit) (a, c *git.Signature, m string, e error) {
+	m = commit.RawMessage()
+	a, c = commit.Author(), commit.Committer()
+	a.Name, c.Name = np.Name, np.Name
+
+	return
+}
+
+// This processor replace email for both author and committer in all commits
+// processed.
+type EmailProcessor struct {
+	// New email to apply on commits.
+	Email string
+}
+
+// Preprocess is no-op for EmailProcessor
+func (ep *EmailProcessor) Preprocess(_ Commits) error { return nil }
+
+// Change author and committer email to the new one defined by the structure.
+func (ep *EmailProcessor) Process(commit *git.Commit) (a, c *git.Signature, m string, e error) {
+	m = commit.RawMessage()
+	a, c = commit.Author(), commit.Committer()
+	a.Email, c.Email = ep.Email, ep.Email
+
+	return
+}
+
+// Processor for composing multiple processors, order matter especially if
+// there is possibilities for override. ComposerProcessor is also a Processer
+// and run Preprocess/Process of embedded Processer in order of appearance.
+type ComposerProcessor struct {
+	// List of processors to apply on each commit.
+	Processors []Processer
+}
+
+// Run Preprocess of embedded Processer in order of appearance.
+func (cp *ComposerProcessor) Preprocess(commits Commits) error {
+	for _, processor := range cp.Processors {
+		if err := processor.Preprocess(commits); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Push changes from new to res only if new is different from old entry.
+func mergeSignature(res, new, old *git.Signature) {
+	if old.When != new.When {
+		res.When = new.When
+	}
+	if old.Name != new.Name {
+		res.Name = new.Name
+	}
+	if old.Email != new.Email {
+		res.Email = new.Email
+	}
+}
+
+// Run Process of embedded processers in order of appearance. Note that if
+// there is a difference with the base commit, only the last one is kept.
+// Override is performed in order of appearance, i.e:
+//	Processors: [processer_1, processer_2]
+//
+//	Process -> processer_1.Process -> processer_2.Process
+//
+func (pc *ComposerProcessor) Process(commit *git.Commit) (a, c *git.Signature, m string, e error) {
+	m = commit.RawMessage()
+	a, c = commit.Author(), commit.Committer()
+	for _, processor := range pc.Processors {
+		_a, _c, _m, _e := processor.Process(commit)
+		if e = _e; e != nil {
+			return
+		}
+		if m != _m {
+			m = _m
+		}
+		mergeSignature(a, _a, commit.Author())
+		mergeSignature(c, _c, commit.Committer())
 	}
 	return
 }
