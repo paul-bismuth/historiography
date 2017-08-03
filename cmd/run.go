@@ -29,9 +29,18 @@ func newComposerProcessor(name, email string) *histo.ComposerProcessor {
 	return &histo.ComposerProcessor{processors}
 }
 
-func run(args []string, name, email string) (err error) {
+func filter(commits histo.Commits, start int) []histo.Commits {
+	var iterator histo.RetrieveIterator
+	for i := start; i < len(commits); i++ {
+		iterator.RevWalkIterator(commits[i])
+	}
+	return iterator.Commits
+}
+
+func run(args []string, nb int, name, email string) (err error) {
+	var size int
 	var repo *git.Repository
-	var commits []histo.Commits
+	var commits, filtered []histo.Commits
 	var historiography *histo.Historiography
 
 	processor := newComposerProcessor(name, email)
@@ -46,7 +55,7 @@ func run(args []string, name, email string) (err error) {
 
 		defer repo.Free()
 		// retrieve all commits from HEAD
-		if commits, err = histo.Retrieve(repo); err != nil {
+		if size, commits, err = histo.Retrieve(repo); err != nil {
 			return
 		}
 		if glog.V(5) {
@@ -64,12 +73,16 @@ func run(args []string, name, email string) (err error) {
 		// be sure to free resources when ending
 		defer historiography.Free()
 
+		filtered = commits
+		if nb >= 0 {
+			filtered = filter(histo.Flatten(commits), size-nb)
+		}
 		// infers changes needed to be in sync with the distribution strategy
-		if err = historiography.Preprocess(commits); err != nil {
+		if err = historiography.Preprocess(filtered); err != nil {
 			return
 		}
 
-		// logs changes in a convenient if verbosity is hight enough
+		// logs changes in a convenient if verbosity is high enough
 		if glog.V(2) {
 			if dp, ok := processor.Processors[0].(*histo.DateProcessor); ok {
 				logs(commits, dp)

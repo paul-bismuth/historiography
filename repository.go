@@ -29,7 +29,8 @@ func (rri *RetrieveRootIterator) RevWalkIterator(commit *git.Commit) bool {
 // branch. This iterator is used to group commits per day and is used by the
 // Retrieve function.
 type RetrieveIterator struct {
-	commits []Commits
+	Commits []Commits
+	nb      int
 	day     int
 	year    int
 	month   time.Month
@@ -38,12 +39,13 @@ type RetrieveIterator struct {
 // Iterator function, go over commits and store them in an internal structure.
 func (ri *RetrieveIterator) RevWalkIterator(commit *git.Commit) bool {
 	date := commit.Author().When
+	ri.nb += 1
 	if ri.day != date.Day() || ri.month != date.Month() || ri.year != date.Year() {
-		ri.commits = append(ri.commits, Commits{})
+		ri.Commits = append(ri.Commits, Commits{})
 		ri.year, ri.month, ri.day = date.Date()
 	}
-	index := len(ri.commits) - 1
-	ri.commits[index] = append(ri.commits[index], commit)
+	index := len(ri.Commits) - 1
+	ri.Commits[index] = append(ri.Commits[index], commit)
 
 	return true
 }
@@ -77,7 +79,7 @@ func RetrieveRoot(repo *git.Repository) (*git.Commit, error) {
 
 // Retrieve all commits of the current repository branch.
 // It internally use RepoWalk with an instance of a RetrieveIterator.
-func Retrieve(repo *git.Repository) (commits []Commits, err error) {
+func Retrieve(repo *git.Repository) (nb int, commits []Commits, err error) {
 	var ri RetrieveIterator
-	return ri.commits, RepoWalk(repo, &ri)
+	return ri.nb, ri.Commits, RepoWalk(repo, &ri)
 }
