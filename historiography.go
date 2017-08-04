@@ -10,12 +10,8 @@ const branchNameSize = 8
 
 // Create a temporary branch using a randomly generated string. Returns
 // the reference of this branch to caller.
-func tmpBranch(repo *git.Repository) (*git.Reference, error) {
+func tmpBranch(repo *git.Repository, root *git.Commit) (*git.Reference, error) {
 	name := func() string { return SecureRandomString(branchNameSize) }
-	root, err := RetrieveRoot(repo) // retrieve first commit of HEAD ref, to create branch from
-	if err != nil {
-		return nil, err
-	}
 
 	for { // we loop here just in case a branch with the same name exists
 		branch, err := repo.CreateBranch(name(), root, false)
@@ -36,6 +32,7 @@ type Historiography struct {
 	checkout   git.CheckoutOpts
 	cherrypick git.CherrypickOptions
 	processer  Processer
+	Commits    []Commits
 }
 
 // Build a new Historiography struct, create branches, and hold references.
@@ -43,7 +40,7 @@ type Historiography struct {
 // For the moment the object hold reference from head, in the future we'd like
 // to configure the branch from which the temporary branch is created and which
 // will be overriden.
-func NewHistoriography(repo *git.Repository, p Processer) (h *Historiography, err error) {
+func NewHistoriography(repo *git.Repository, p Processer, nb int) (h *Historiography, err error) {
 	h = &Historiography{repo: repo, processer: p}
 	h.checkout = git.CheckoutOpts{Strategy: git.CheckoutForce}
 
@@ -61,8 +58,12 @@ func NewHistoriography(repo *git.Repository, p Processer) (h *Historiography, er
 		return
 	}
 
+	if h.Commits, err = Retrieve(repo, nb); err != nil {
+		return
+	}
+
 	// create tmp branch
-	if h.tmp, err = tmpBranch(repo); err != nil {
+	if h.tmp, err = tmpBranch(repo, h.Commits[0][0]); err != nil {
 		return
 	}
 

@@ -38,9 +38,8 @@ func filter(commits histo.Commits, start int) []histo.Commits {
 }
 
 func run(args []string, nb int, name, email string) (err error) {
-	var size int
 	var repo *git.Repository
-	var commits, filtered []histo.Commits
+	var commits []histo.Commits
 	var historiography *histo.Historiography
 
 	processor := newComposerProcessor(name, email)
@@ -55,30 +54,22 @@ func run(args []string, nb int, name, email string) (err error) {
 
 		defer repo.Free()
 		// retrieve all commits from HEAD
-		if size, commits, err = histo.Retrieve(repo); err != nil {
-			return
-		}
+
 		if glog.V(5) {
 			glog.Infof("%q", commits) // display all commits retrieved in debug mode
 		}
-		// if no commits, no need to go further
-		if len(commits) == 0 {
-			return
-		}
 
 		// init historiography struct
-		if historiography, err = histo.NewHistoriography(repo, processor); err != nil {
+		if historiography, err = histo.NewHistoriography(repo, processor, nb); err != nil {
 			return
 		}
 		// be sure to free resources when ending
 		defer historiography.Free()
 
-		filtered = commits
-		if nb >= 0 {
-			filtered = filter(histo.Flatten(commits), size-nb)
-		}
+		commits = historiography.Commits
+
 		// infers changes needed to be in sync with the distribution strategy
-		if err = historiography.Preprocess(filtered); err != nil {
+		if err = historiography.Preprocess(commits); err != nil {
 			return
 		}
 
