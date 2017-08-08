@@ -53,8 +53,6 @@ func run(args []string, nb int, name, email string) (err error) {
 		}
 
 		defer repo.Free()
-		// retrieve all commits from HEAD
-
 		if glog.V(5) {
 			glog.Infof("%q", commits) // display all commits retrieved in debug mode
 		}
@@ -108,7 +106,7 @@ func confirm(h *histo.Historiography, repo *git.Repository) (err error) {
 
 // Logs commits and changes through glog in a readable way.
 func logs(commits []histo.Commits, p *histo.DateProcessor) {
-	fmt := func(t time.Time) string { return t.Format("15:06") } // all times formatted the same way
+	fmt := func(t time.Time) string { return t.Format("15:04") } // all times formatted the same way
 
 	for _, day := range commits {
 		// there can't be empty day, at least one commit will exists

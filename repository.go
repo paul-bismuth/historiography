@@ -31,7 +31,7 @@ func (ri *RetrieveIterator) RevWalkIterator(commit *git.Commit) bool {
 		ri.Commits = append([]Commits{Commits{}}, ri.Commits...)
 		ri.year, ri.month, ri.day = date.Date()
 	}
-	ri.Commits[0] = append(ri.Commits[0], commit)
+	ri.Commits[0] = append(Commits{commit}, ri.Commits[0]...)
 
 	ri.nb -= 1
 	if ri.nb == 0 {
